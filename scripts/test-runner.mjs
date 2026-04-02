@@ -8,6 +8,7 @@ import {
   DockerRunner,
   HostRunner,
   buildClaudeArgs,
+  buildDockerArgs,
   buildRunnerEnv,
   createCredentialBootstrap,
   createRunner,
@@ -92,10 +93,35 @@ const bootstrap = createCredentialBootstrap(
   '{"hasCompletedOnboarding":true}'
 );
 assert.equal(bootstrap.source, 'macos-keychain');
-assert.equal(bootstrap.mountArgs.length, 4);
+assert.equal(bootstrap.mountArgs.length, 2);
 assert.ok(bootstrap.mountArgs[1].includes('/home/node/.claude/.credentials.json:ro'));
-assert.ok(bootstrap.mountArgs[3].includes('/home/node/.claude.json'));
 assert.match(readFileSync(bootstrap.mountArgs[1].split(':')[0], 'utf8'), /oauth_token/);
+const dockerArgs = buildDockerArgs({
+  prompt: 'Reply with OK.',
+  projectDir: '/tmp/project',
+  pipelineDir: '/tmp/pipeline',
+  model: 'claude-sonnet-4-6',
+  roleFile: '/tmp/role.md',
+  pipelineAgent: 'C',
+  securityMode: 'fast',
+}, bootstrap);
+assert.equal(dockerArgs[0], 'run');
+assert.equal(dockerArgs[1], '--rm');
+assert.ok(!dockerArgs.includes('-i'));
+assert.ok(dockerArgs.includes('dev-squad-agent:latest'));
+assert.ok(dockerArgs.includes('/usr/local/share/npm-global/bin/claude'));
+assert.ok(!dockerArgs.includes('sh'));
+assert.ok(!dockerArgs.includes('-lc'));
+assert.ok(!dockerArgs.includes('ANTHROPIC_API_KEY'));
+
+const dockerArgsWithAuth = buildDockerArgs({
+  prompt: 'Reply with OK.',
+  projectDir: '/tmp/project',
+  model: 'claude-sonnet-4-6',
+  systemPrompt: 'You are helpful.',
+  extraEnv: { CLAUDE_CODE_OAUTH_TOKEN: 'token-123' },
+}, bootstrap);
+assert.ok(dockerArgsWithAuth.includes('CLAUDE_CODE_OAUTH_TOKEN'));
 bootstrap.cleanup();
 rmSync(credentialsTmp, { recursive: true, force: true });
 
