@@ -111,6 +111,7 @@ A pixel art office where 5 agents sit at desks. You watch them work in real-time
 
 - **Live Feed** — Every event from every agent, timestamped and color-coded
 - **Dashboard** — Phase progress, elapsed time, file count, errors
+- **Supervisor Update** — A manager-style summary of what the team is doing, what is blocked, and what S needs from you next
 - **Current Turn** — Shows which agent turn is active, what it is doing, and whether it looks stalled
 - **5-Panel Grid** — Supervisor panel on the left, Planner / Plan Reviewer / Coder / Tester on the right. Each panel shows that agent's activity with auto-scroll. Click any panel to expand.
 - **Per-Panel Chat** — Each panel has its own input. Talk directly to any agent.
@@ -201,7 +202,7 @@ Once the build is complete, you can chat directly with any agent for post-build 
 
 ### The Supervisor Panel
 
-The Supervisor panel on the left is the clearest version of the product idea. It is still just a Claude session, like any session you would open yourself, except it knows it has a team and a shared build doctrine behind it. Before a run starts, the supervisor captures the concept locally and waits for an explicit start command instead of freelancing. Once a run exists, the supervisor gets a live team snapshot every time you chat with it: current phase, pipeline status, active turn, recent events, pending approvals, and recommended next actions. The supervisor can also trigger the core team controls directly from chat: start a run, start plan-only mode, stop after review, continue an approved plan, resume a stalled planning/review turn, or stop the run. If something breaks, stalls, loops, or looks suspicious, ask the supervisor what is happening or tell it what you want the team to do next.
+The Supervisor panel on the left is the clearest version of the product idea. It is still just a Claude session, like any session you would open yourself, except it knows it has a team and a shared build doctrine behind it. Before a run starts, the supervisor captures the concept locally and waits for an explicit start command instead of freelancing. Once a run exists, the supervisor gets a live team snapshot every time you chat with it: current phase, pipeline status, active turn, recent events, pending approvals, and recommended next actions. The UI now also shows a proactive supervisor update card so you do not have to read raw event logs just to understand what the team is doing. The supervisor can also trigger the core team controls directly from chat: start a run, start plan-only mode, stop after review, continue an approved plan, resume a stalled planning/review turn, or stop the run. If something breaks, stalls, loops, or looks suspicious, ask the supervisor what is happening or tell it what you want the team to do next.
 
 ### Controls Reference
 

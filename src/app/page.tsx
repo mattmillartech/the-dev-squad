@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/shared/Badge';
 import { LunarOfficeScene } from '@/components/mission/LunarOfficeScene';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
-import { getSupervisorRecommendation } from '@/lib/pipeline-supervisor';
+import { getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
 import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
 
 const AGENT_NAMES: Record<AgentId, string> = {
@@ -281,6 +281,7 @@ export default function PipelinePage() {
   );
   const canContinueApprovedPlan = pipelinePaused && phase === 'plan-review' && !!state.events.some((event) => event.text.includes('PLAN APPROVED'));
   const supervisorRecommendation = isPipeline ? getSupervisorRecommendation(state, pendingApproval) : null;
+  const supervisorUpdate = isPipeline ? getSupervisorUpdate(state, pendingApproval) : null;
 
   return (
     <div className="p-4 space-y-4">
@@ -563,22 +564,27 @@ export default function PipelinePage() {
                 </div>
               )}
 
-              {supervisorRecommendation && (
+              {supervisorUpdate && (
                 <div>
-                  <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">Suggested Next Action</div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">Supervisor Update</div>
                   <div className={`rounded-lg border px-3 py-2 text-[11px] ${
-                    supervisorRecommendation.severity === 'warning'
+                    supervisorUpdate.severity === 'warning'
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                      : supervisorRecommendation.severity === 'success'
+                      : supervisorUpdate.severity === 'success'
                       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
                       : 'border-white/10 bg-white/5 text-slate-300'
                   }`}>
-                    <div className="font-semibold">{supervisorRecommendation.title}</div>
-                    <p className="mt-1 leading-relaxed">{supervisorRecommendation.detail}</p>
-                    {(supervisorRecommendation.actionLabel || supervisorRecommendation.chatCommand) && (
+                    <div className="font-semibold">{supervisorUpdate.title}</div>
+                    <p className="mt-1 leading-relaxed">{supervisorUpdate.summary}</p>
+                    {supervisorUpdate.ask && (
+                      <p className="mt-2 text-[11px] leading-relaxed text-slate-300/90">
+                        {supervisorUpdate.ask}
+                      </p>
+                    )}
+                    {(supervisorRecommendation?.actionLabel || supervisorRecommendation?.chatCommand) && (
                       <p className="mt-2 text-[10px] uppercase tracking-wider text-slate-400">
-                        {supervisorRecommendation.actionLabel || 'Suggested action'}
-                        {supervisorRecommendation.chatCommand ? ` · try "${supervisorRecommendation.chatCommand}"` : ''}
+                        {supervisorRecommendation?.actionLabel || 'Suggested action'}
+                        {supervisorRecommendation?.chatCommand ? ` · try "${supervisorRecommendation.chatCommand}"` : ''}
                       </p>
                     )}
                   </div>
@@ -668,6 +674,21 @@ export default function PipelinePage() {
             ref={(el) => { panelRefs.current.S = el; }}
             className="flex-1 space-y-px overflow-y-auto px-2.5 py-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-sm [&::-webkit-scrollbar-thumb]:bg-[#252530] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-[3px]"
           >
+            {isPipeline && supervisorUpdate && (
+              <div className={`mb-2 rounded border px-2 py-1.5 text-[11px] ${
+                supervisorUpdate.severity === 'warning'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                  : supervisorUpdate.severity === 'success'
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                  : 'border-white/10 bg-white/5 text-slate-300'
+              }`}>
+                <div className="font-semibold">{supervisorUpdate.title}</div>
+                <p className="mt-1 leading-relaxed">{supervisorUpdate.summary}</p>
+                {supervisorUpdate.ask && (
+                  <p className="mt-2 text-[10px] uppercase tracking-wider text-slate-400">{supervisorUpdate.ask}</p>
+                )}
+              </div>
+            )}
             {agentEvents('S').length === 0 && (
               <p className="pt-16 text-center text-xs tracking-wider text-[#252530]">{isPipeline ? 'Ask S to manage the run, or message any specialist directly.' : 'Chat with the Supervisor'}</p>
             )}
@@ -690,7 +711,7 @@ export default function PipelinePage() {
           </div>
           <div className="flex-shrink-0 border-t border-[#1a1a2a] px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
             <div className="mb-1.5 text-[10px] text-[#444]">
-              Recommended: <span className="font-semibold text-emerald-400">S (Supervisor)</span>
+              Recommended: <span className="font-semibold text-emerald-400">Supervisor first</span>
             </div>
             <div className="flex gap-2">
               <input
@@ -698,7 +719,11 @@ export default function PipelinePage() {
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Ask S, or chat with any specialist directly..."
+                placeholder={isPipeline
+                  ? (supervisorRecommendation?.chatCommand
+                      ? `Ask the supervisor anything, or try "${supervisorRecommendation.chatCommand}"`
+                      : 'Ask the supervisor anything, or chat with any specialist directly...')
+                  : 'Chat with the Supervisor'}
                 disabled={sendingAgents.has('S')}
                 className="flex-1 rounded-lg border border-[#252530] bg-[#14141e] px-3 py-2 text-sm text-white placeholder-[#444] focus:border-emerald-600 focus:outline-none disabled:opacity-30"
               />

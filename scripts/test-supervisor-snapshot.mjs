@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { buildSupervisorSnapshot } from '../src/lib/pipeline-supervisor.ts';
+import { buildSupervisorSnapshot, getSupervisorUpdate } from '../src/lib/pipeline-supervisor.ts';
 
 const pausedSnapshot = buildSupervisorSnapshot(
   {
@@ -21,6 +21,8 @@ const pausedSnapshot = buildSupervisorSnapshot(
 
 assert.match(pausedSnapshot, /Run goal: plan-only/);
 assert.match(pausedSnapshot, /Pipeline status: paused/);
+assert.match(pausedSnapshot, /Supervisor update:/i);
+assert.match(pausedSnapshot, /Planning is done/i);
 assert.match(pausedSnapshot, /Recommended supervisor action:/i);
 assert.match(pausedSnapshot, /Plan approved, waiting on you/i);
 assert.match(pausedSnapshot, /try: "continue build"/i);
@@ -52,6 +54,7 @@ const stalledSnapshot = buildSupervisorSnapshot(
 );
 
 assert.match(stalledSnapshot, /Active turn: A \/ planning \/ stalled/);
+assert.match(stalledSnapshot, /A planning turn looks recoverable/i);
 assert.match(stalledSnapshot, /Recoverable A stall/i);
 assert.match(stalledSnapshot, /try: "resume stalled run"/i);
 
@@ -74,5 +77,35 @@ const idleFailureSnapshot = buildSupervisorSnapshot(
 
 assert.match(idleFailureSnapshot, /Tell S what to build/i);
 assert.doesNotMatch(idleFailureSnapshot, /Something needs attention/i);
+
+const codingUpdate = getSupervisorUpdate(
+  {
+    concept: 'Tiny hello page',
+    currentPhase: 'coding',
+    pipelineStatus: 'running',
+    securityMode: 'fast',
+    runGoal: 'full-build',
+    stopAfterPhase: 'none',
+    activeAgent: 'C',
+    buildComplete: false,
+    agentStatus: { A: 'done', B: 'done', C: 'active', D: 'idle', S: 'idle' },
+    runtime: {
+      activeTurn: {
+        agent: 'C',
+        phase: 'coding',
+        status: 'running',
+        lastEventAt: '2026-04-02T00:00:00.000Z',
+        promptSummary: 'Build the app',
+        autoResumeCount: 0,
+      },
+    },
+    events: [{ time: '2026-04-02T00:00:00.000Z', agent: 'C', phase: 'coding', type: 'status', text: 'Coder is implementing the approved plan.' }],
+  },
+  null
+);
+
+assert.equal(codingUpdate.title, 'The coder is implementing the approved plan');
+assert.match(codingUpdate.summary, /locked plan/i);
+assert.match(codingUpdate.ask || '', /no action needed/i);
 
 console.log('supervisor snapshot checks passed');

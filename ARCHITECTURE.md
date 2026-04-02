@@ -20,7 +20,7 @@ The product is moving toward "give Claude a dev team":
 
 Today, pipeline mode can now start from the **Supervisor** as well as direct planner chat. The supervisor has the first real control-plane actions: saved-session recovery for planning/review turns, `plan-only`, `stop after review`, `continue build` from an approved plan, and chat-triggered start/stop/resume actions. The next implementation step is to keep moving authority toward the supervisor while leaving the actual execution path deterministic in host/orchestrator code. The concrete build plan for that transition lives in [SUPERVISOR-BUILD-PLAN.md](SUPERVISOR-BUILD-PLAN.md).
 
-When the user chats with the supervisor in pipeline mode, the chat route now injects a live team snapshot: current phase, pipeline status, run goal, active turn, recent events, pending approvals, and recommended control actions. Before a run exists, the supervisor captures the concept locally and waits for an explicit start command instead of freelancing. That makes the supervisor much closer to a real team manager instead of a generic diagnostic assistant.
+When the user chats with the supervisor in pipeline mode, the chat route now injects a live team snapshot: current phase, pipeline status, run goal, active turn, recent events, pending approvals, and recommended control actions. The UI also derives a proactive supervisor update from the same state so the user sees a manager-style summary without having to inspect raw logs. Before a run exists, the supervisor captures the concept locally and waits for an explicit start command instead of freelancing. That makes the supervisor much closer to a real team manager instead of a generic diagnostic assistant.
 
 ## The Flow
 
@@ -159,6 +159,7 @@ A Next.js app that polls `pipeline-events.json` every 400ms and renders:
 
 - Pixel art office scene with 5 agents at desks
 - Live feed of all events
+- Proactive supervisor update card driven by live run state
 - 5-panel grid (S + A/B/C/D) with per-agent event streams
 - Current-turn and stalled-turn visibility for recovery
 - Supervisor controls for `plan-only`, `stop after review`, `continue build`, and `resume stalled run`
