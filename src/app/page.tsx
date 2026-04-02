@@ -68,7 +68,8 @@ export default function PipelinePage() {
   const completionNotifiedRef = useRef(false);
 
   const isPipeline = mode === 'pipeline';
-  const pipelineRunning = (pipelineStarted || (!!state.projectDir && state.currentPhase !== 'concept')) && !state.buildComplete;
+  const hasLivePipelineActivity = Boolean(state.activeAgent || state.runtime?.activeTurn || pendingApproval);
+  const pipelineRunning = isPipeline && !state.buildComplete && (pipelineStarted || hasLivePipelineActivity);
 
   // Auto-scroll: all panels, expanded modal, and live feed
   useEffect(() => {
@@ -494,7 +495,7 @@ export default function PipelinePage() {
 
           {/* Controls */}
           <div className="flex gap-2">
-            {isPipeline && !pipelineRunning && (
+            {isPipeline && !pipelineRunning && (!state.projectDir || state.currentPhase === 'concept' || state.buildComplete) && (
               <button onClick={handleStartPipeline} className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold text-black transition hover:bg-emerald-400">
                 START
               </button>

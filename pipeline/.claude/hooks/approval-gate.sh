@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# Pipeline Approval Gate (Hardened v2)
+# Pipeline Role Guardrails (Hardened v2)
 #
 # Per-agent permission enforcement. Auto mode handles general safety.
-# This hook handles pipeline-specific rules with DENY-BY-DEFAULT.
+# This hook provides role guardrails and safety boundaries with DENY-BY-DEFAULT.
 #
-# LIMITATIONS: This hook prevents agents from accidentally exceeding their role.
-# It is NOT a security sandbox. A sufficiently adversarial agent could bypass
-# bash-level grep filters via indirect execution. For true isolation, use
-# OS-level sandboxing (containers, chroot, etc).
+# LIMITATIONS: This hook supports the dev-team model by preserving role
+# discipline and basic safety boundaries. It is NOT a security sandbox.
+# A sufficiently adversarial agent could bypass bash-level grep filters via
+# indirect execution. For true isolation, use OS-level sandboxing.
 #
 # AGENT S (Supervisor): Read unrestricted. Write/Edit jailed to ~/Builds/. Bash allowed.
 # AGENT A (Planner):    Can only write plan.md in current project. No Bash. No Agent tool.
@@ -232,13 +232,18 @@ if [ "$TOOL_NAME" = "Bash" ]; then
   PROJECT_ROOT=$(find_project_root)
   APPROVED_BASH_FILE="$PROJECT_ROOT/pipeline-approved-bash.json"
 
-  # Block any command referencing .claude, hooks, or settings
-  case "$COMMAND" in
-    *".claude"*|*"approval-gate"*|*"settings.json"*|*"hooks/"*)
-      echo "BLOCKED: Cannot modify hook or settings files via Bash" >&2
-      exit 2
-      ;;
-  esac
+  # Block direct shell-level modifications of .claude, hooks, or settings.
+  # Keep this narrow enough that harmless string mentions (for example in a
+  # Python snippet or allowlist check) do not get blocked as false positives.
+  if printf '%s\n' "$COMMAND" | grep -Eiq '(^|[;&|[:space:]])(rm|mv|cp|chmod|chown|touch|mkdir|rmdir|sed|tee)\b.*(\.claude(/|[[:space:]]|$)|approval-gate(\.sh)?|settings\.json|hooks/)'; then
+    echo "BLOCKED: Cannot modify hook or settings files via Bash" >&2
+    exit 2
+  fi
+
+  if printf '%s\n' "$COMMAND" | grep -Eiq '(>|>>|<).*(\.claude/|approval-gate(\.sh)?|settings\.json|hooks/)'; then
+    echo "BLOCKED: Cannot modify hook or settings files via Bash" >&2
+    exit 2
+  fi
 
   # Block mv/cp/rm with any glob that could target .claude (e.g., .c*, .cl*)
   # Block these commands entirely when they contain glob wildcards near dot-files

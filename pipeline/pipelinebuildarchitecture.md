@@ -1,18 +1,28 @@
 # Pipeline Build Architecture
 
-Five agents. Each has one job. They pass work back and forth until it's perfect.
+One supervisor. Four specialists. They pass work back and forth until it's right.
 
-This file is the conceptual pipeline sketch. For the current implementation and security model, use [ARCHITECTURE.md](../ARCHITECTURE.md), [SECURITY.md](../SECURITY.md), and [SECURITY-ROADMAP.md](../SECURITY-ROADMAP.md).
+This file is the conceptual pipeline sketch. For the current implementation and security model, use [ARCHITECTURE.md](../ARCHITECTURE.md), [SECURITY.md](../SECURITY.md), and [SECURITY-ROADMAP.md](../SECURITY-ROADMAP.md). For the supervisor/operator direction, use [SUPERVISOR-BUILD-PLAN.md](../SUPERVISOR-BUILD-PLAN.md).
 
 ---
 
 ## The Agents
 
-- **S — Supervisor**: Diagnostic assistant available on demand. Reads broadly, helps when things go wrong, and is not part of the normal autonomous loop.
+- **S — Supervisor**: Supervisor/operator for the team. Reads broadly, helps when things go wrong, and is the direction for the human-facing control surface.
 - **A — Planner**: Builds the plan, answers questions, and handles the final handoff
 - **B — Plan Reviewer**: Pokes holes in the plan until there are none left
 - **C — Coder**: Follows the approved plan and writes the code
 - **D — Code Reviewer + Tester**: Reviews the code against the plan, then tests it
+
+## Shared Doctrine
+
+The team should operate from the same doctrine:
+
+- `build-plan-template.md`
+- `checklist.md`
+- the locked `plan.md` once approved
+
+That is the backbone of the team model. The hook supports discipline and safety, but the doctrine is what keeps the team aligned.
 
 ---
 
@@ -22,7 +32,7 @@ This file is the conceptual pipeline sketch. For the current implementation and 
 
 1. The **user** gives the build concept to **A**. This is the only required human interaction.
 2. **A** can ask the user clarifying questions — what do you want, how should it work, any constraints? The user answers. This is usually the last time the user needs to steer the build directly.
-3. From this point forward, the pipeline runs autonomously by default. The user usually watches the dashboard rather than steering the flow, but approvals can still appear for Bash commands in strict mode.
+3. From this point forward, the pipeline runs autonomously by default. The user usually watches the dashboard rather than steering the flow, but approvals can still appear for Bash commands in strict mode and `S` can help explain or recover the run when needed.
 
 ### Phase 1: Planning
 
@@ -68,7 +78,8 @@ This file is the conceptual pipeline sketch. For the current implementation and 
 
 ## Rules
 
-- **A** is the only agent that talks to everyone. A is the orchestrator.
+- **A** is still the central worker inside the current pipeline flow.
+- **S** is the supervisor above the flow and the direction for the human-facing operator role.
 - **B** only ever talks to **A**. B reviews the plan and nothing else.
 - **C** talks to **A** (questions) and **D** (code handoff and fixes).
 - **D** talks to **C** (review feedback) and **A** (final handoff when done).

@@ -1,317 +1,237 @@
-# Supervisor Build Plan
+# Supervisor And Dev Team Build Plan
 
-This document captures the current build plan for the next major evolution of The Dev Squad so work can continue cleanly even if the active session loses context.
+This document captures the next product direction for The Dev Squad so the idea survives context loss and implementation stays coherent.
 
-## Why This Exists
+## Product Thesis
 
-`v0.3.0` made the current pipeline safer and more reliable, but it also exposed the next bottleneck:
+The Dev Squad should feel like this:
 
-- long planner turns can stall after doing expensive research
-- the user still has to think like the orchestrator when runs get weird
-- `S` is useful for diagnosis, but not yet useful for control
-- resetting a stalled run can waste tokens because the planner's work is not recoverable enough
+- you give Claude a dev team
+- `S` is the manager/operator
+- `A`, `B`, `C`, and `D` are the specialists
+- the whole team follows the same master doctrine:
+  - `build-plan-template.md`
+  - `checklist.md`
+  - the current project context
 
-The next build should solve that operator experience, not just add more hook logic.
+This is not mainly an autonomy story.
 
-## Product Direction
+It is a quality-and-coordination story:
 
-Turn `S` into the primary supervisor/operator for the system.
+- one supervisor
+- four specialists
+- one shared operating system for how work gets done
 
-The target user experience is:
+## What Changes From The Old Pipeline Model
 
-1. The user talks to `S`
-2. `S` decides how to use `A`, `B`, `C`, and `D`
-3. `S` can inspect, pause, resume, narrow, or stop work without the user manually reasoning about pipeline internals
-4. The user can still override `S` at any time
+The old framing was:
 
-This is not "make `S` an all-powerful agent." It is "make `S` the human-facing operator on top of deterministic host controls."
+- rigid pipeline lanes
+- hard handoffs
+- hooks as the main product story
+- user often acting like the orchestrator
 
-## Core Design Principle
+The new framing should be:
 
-`S` should be hybrid:
+- `S` manages the team
+- the specialists know the team structure
+- all workers know the shared doctrine
+- hooks become lighter role guardrails, not the product identity
+- the user talks to the supervisor, not to a workflow engine
 
-- softcoded for judgment
-- hardcoded for control
+## Shared Doctrine
 
-Softcoded means `S` uses an LLM role/prompt to decide:
+The master doctrine for the team is:
 
-- whether to ask `A` for a plan
-- whether `B` should keep reviewing
-- whether to stop before `C`
-- whether a run looks stalled
-- how to summarize tradeoffs and next actions to the user
+1. `build-plan-template.md`
+2. `checklist.md`
+3. the locked `plan.md` once approved
 
-Hardcoded means `S` gets explicit host/orchestrator capabilities instead of extra ambient Bash power.
+That doctrine should be visible to the whole team:
 
-## What Stays The Same
+- `A` uses it to research and write
+- `B` uses it to review
+- `C` uses it to implement
+- `D` uses it to review and test
+- `S` uses it to manage and diagnose
 
-- `A` remains the planner/researcher
-- `B` remains the plan reviewer
-- `C` remains the coder
-- `D` remains the reviewer/tester
-- hooks still protect worker sessions
-- strict mode stays available
-- sandboxing remains the `v0.4` security milestone
+The checklist and template are not just planner-only artifacts anymore. They are the team's operating system.
 
-## What Changes
+## Supervisor Model
 
-### `S` Becomes The Control Plane Agent
+`S` should act like the manager of the dev team.
 
-`S` should be able to:
+That means:
 
-- inspect the active run and summarize status
-- start a full pipeline run
-- start a planning-only run
-- stop after plan review
-- stop before coding
-- stop a stuck run
-- resume a recoverable stalled session
-- surface pending approvals
-- recommend whether to continue, retry, or abort
+- `S` knows each specialist's role
+- `S` understands where the build is in the process
+- `S` can explain what the team is doing
+- `S` can recommend whether to continue, stop, retry, or recover
+- `S` eventually becomes the main control surface for plan-only, stop-after-review, resume, and similar actions
 
-`S` should not gain this power by writing files or running unrestricted repo Bash. It should use host-owned control actions.
+`S` should not become "the same worker with more Bash." The real control authority should still live in deterministic host/orchestrator code.
 
-### The User Stops Acting Like The Orchestrator
+## Worker Model
 
-Right now the user often has to infer:
+### `A` — Planner
 
-- whether a run is truly stuck
-- whether approval is pending
-- whether a reset will waste prior work
-- whether to let a run continue into coding
+- researches
+- writes `plan.md`
+- performs one self-review pass
+- answers review questions from `B`
 
-The new model should let the user ask `S` plain-language questions like:
+### `B` — Plan Reviewer
 
-- "What is happening?"
-- "Is this actually stuck?"
-- "Resume the planner without repeating research."
-- "Let A and B finish the plan, then stop."
-- "Do not hand this to C yet."
+- audits the plan against the same doctrine
+- looks for gaps, unverified claims, and architectural weakness
+- does not rubber-stamp
+
+### `C` — Coder
+
+- treats the approved plan as the implementation contract
+- asks for clarification instead of improvising
+- loops with `D` until the implementation is accepted
+
+### `D` — Reviewer + Tester
+
+- checks implementation against the plan
+- tests behavior against the plan
+- sends concrete issues back to `C`
+
+## Hook Philosophy
+
+Hooks should remain, but with a smaller and clearer purpose.
+
+Keep hooks for:
+
+- cross-project safety
+- plan-lock safety
+- recursive-agent safety
+- strict-mode Bash approvals
+- obvious role-boundary violations that damage team discipline
+
+Do not treat hooks as the product itself.
+
+The team should feel coordinated because of:
+
+- shared doctrine
+- supervisor management
+- specialist roles
+
+not because every behavior is over-policed by shell rules.
 
 ## Immediate Problem To Solve
 
-Planner turns are too expensive and too fragile.
+The most expensive current failure mode is not "an agent disobeyed its lane."
 
-Today, a long `A` planning turn can do most of the research and then stall before writing `plan.md`. When that happens, the user often has to reset and lose momentum.
+It is:
 
-The highest-value technical fix is recoverability:
+- long valuable turns stall
+- the user loses confidence
+- resets waste tokens
+- the system feels like a workflow engine instead of a team
 
-1. persist session ids as soon as they appear in the streaming output
-2. add an idle watchdog for long turns
-3. support resume/retry against the same session
-4. split planning into smaller turns when practical
+That is why recoverability and supervisor-led control remain the first engineering priority.
 
-## Control Plane Capabilities
+## Phase Plan
 
-These should be implemented as explicit host/orchestrator actions, not inferred from repo state alone.
+## Phase 1: Team Doctrine Rewrite
 
-### Required Actions
-
-- `inspect_run(projectDir?)`
-- `start_pipeline({ prompt, mode, stopAfter })`
-- `stop_pipeline(projectDir)`
-- `resume_agent({ projectDir, agent, sessionId, prompt })`
-- `retry_phase({ projectDir, phase, instruction })`
-- `get_pending_approvals(projectDir?)`
-- `approve_request({ projectDir, requestId, approved })`
-- `handoff_to_c(projectDir)`
-- `mark_plan_only(projectDir)`
-
-### Nice-To-Have Actions
-
-- `retry_planner_write_only(projectDir)`
-- `resume_from_last_good_checkpoint(projectDir)`
-- `summarize_project_risk(projectDir)`
-- `list_recent_runs()`
-
-## Worker And Permission Model
-
-### Workers
-
-- `A`: research, write `plan.md`, perform one self-review pass
-- `B`: verify the plan, challenge assumptions, approve or send questions
-- `C`: build from the approved plan
-- `D`: review code, test, and send failures back
-
-### Supervisor
-
-`S` should not be treated like "worker plus more Bash." `S` should be treated like an operator with access to control-plane actions.
-
-### Hooks
-
-Keep hooks for worker sessions.
-
-Why:
-
-- worker guardrails still matter
-- strict mode still matters
-- hooks still prevent a lot of accidental lane drift
-
-But hooks should not be the main way `S` exercises control. That authority should live outside the worker workspace.
-
-## Failure Handling
-
-### If `A` Stalls
-
-- detect idle time
-- keep the session id
-- let `S` resume the same session with a narrower instruction
-- avoid restarting research unless necessary
-
-### If `B` Stalls
-
-- same recovery path: inspect, resume, or restart only the review turn
-
-### If `S` Stalls
-
-`S` must not be a single point of failure.
-
-The host/orchestrator must still expose:
-
-- stop
-- resume
-- approve/deny
-- inspect state
-
-That way a fresh `S` session can pick up from saved run state.
-
-### If Claude Is Degraded Upstream
-
-The system should degrade gracefully:
-
-- mark the run as stalled instead of looking frozen forever
-- preserve recoverable state
-- offer resume instead of forcing reset
-- let `S` explain whether the issue looks local or upstream
-
-## Phased Build Plan
-
-## Phase 1: Recoverability Foundation
-
-Goal: stop wasting tokens when long turns stall.
+Goal: make the current product feel like a supervised dev team instead of a rigid pipeline.
 
 ### Deliverables
 
-- persist agent session ids mid-turn, not only after turn completion
-- record last event timestamp per agent
-- add idle watchdog logic for planning/review turns
-- add resume support for stalled sessions
-- add a user-visible "Resume" action alongside reset
+- rewrite `role-s.md` as the manager/operator of the team
+- rewrite `role-a.md`, `role-b.md`, `role-c.md`, and `role-d.md` so each agent:
+  - knows the team structure
+  - knows the shared doctrine
+  - understands when to escalate vs follow the process
+- update `build-plan-template.md` and `checklist-template.md` so they read like team doctrine, not just A-only instructions
+- update README and architecture docs to describe the product as "Claude with a dev team"
+- reduce hook language in docs from "pipeline law" to "role guardrails"
 
 ### Acceptance Criteria
 
-- a stalled planner run can be resumed without repeating all prior research
-- the UI no longer sits on a silent "planning" badge forever
-- reset is no longer the only recovery option
+- the repo reads like a supervisor-led team product
+- all specialists reference the shared doctrine
+- `S` is clearly the operator/recovery role
+- docs no longer over-center the rigid pipeline framing
 
-## Phase 2: `S` As Supervisor
+## Phase 2: Supervisor Controls
 
-Goal: shift user interaction from raw pipeline management to supervisor-led control.
+Goal: let `S` actually manage the team instead of only diagnosing it.
 
 ### Deliverables
 
-- rewrite `role-s.md` around operator/supervisor behavior
-- add control-plane endpoints or server-side functions for `S`
-- let the user ask `S` to run plan-only, stop-after-review, resume, or inspect
-- expose clearer state summaries from the backend so `S` does not have to scrape raw event logs for everything
+- plan-only control
+- stop-after-review control
+- resume stalled run control
+- clearer run summaries for `S`
+- user-facing controls that map to supervisor actions
 
 ### Acceptance Criteria
 
-- the user can primarily interact with `S` instead of manually steering phases
-- `S` can explain the current run and recommend the next action
-- `S` can stop work before `C` when the user wants a design-only pass
+- the user can mostly talk to `S`
+- `S` can manage the build without the user manually reasoning about the pipeline
 
-## Phase 3: Smarter Planning Recovery
+## Phase 3: Recovery + Smaller Work Units
 
-Goal: reduce the size and fragility of planner work units.
+Goal: make the team resilient when Claude stalls or upstream quality degrades.
 
 ### Deliverables
 
-- optionally split planning into:
-  - research
-  - write `plan.md`
-  - one self-review pass
-- enforce a research budget or a transition rule once `A` says research is complete
-- support "resume and write only" when research is already done
+- keep mid-turn session persistence
+- keep stalled-turn visibility
+- add resume flows
+- optionally split planning into smaller recoverable units
 
 ### Acceptance Criteria
 
-- architecture-heavy planning runs no longer lose all value when the final write step stalls
-- A's self-review remains intact, but planning is easier to recover
+- valuable work is recoverable
+- reset is no longer the only practical response to stalls
 
-## Phase 4: Sandboxed Execution
+## Phase 4: Sandboxed Team Execution
 
-Goal: align the supervisor model with the `v0.4` security milestone.
+Goal: strengthen containment without changing the dev-team product model.
 
 ### Deliverables
 
-- introduce a runner abstraction
-- move worker execution into per-project sandboxes
-- keep policy outside writable project trees where possible
-- reduce ambient host access for Bash-capable workers
+- runner abstraction
+- per-project sandbox/container execution
+- hooks and policy outside writable project space where possible
+- narrower ambient filesystem and network exposure
 
 ### Acceptance Criteria
 
-- `S` can supervise runs with better containment than the current host-spawned model
-- major remaining risks shift from hook bypasses toward explicit sandbox policy decisions
+- the team model stays intact
+- the security story improves without reverting to "the hooks are the product"
 
-## Role File Direction
+## Current Implementation Recommendation
 
-### `role-s.md`
+Implement Phase 1 now.
 
-Rewrite around these principles:
+That means:
 
-- you are the user's operator and recovery partner
-- prefer delegating to workers over doing their job directly
-- use host control actions to inspect, start, stop, resume, and narrow work
-- summarize status, risk, and next best actions plainly
-- escalate to the user only when a real decision is needed
+1. rewrite the roles around the dev-team model
+2. rewrite the template/checklist around shared doctrine
+3. refresh the docs around "Claude with a dev team"
+4. keep the current recovery work and strict mode
+5. defer deeper control-plane and sandbox work to later phases
 
-### `role-a.md`
+## Non-Goals
 
-Keep the existing promise:
+This phase is not about:
 
-- research thoroughly
-- write code-complete plans
-- perform one self-review pass before handing to `B`
+- removing all hooks immediately
+- removing strict mode
+- claiming stronger security than the system actually has
+- making `S` the only control point
 
-### `role-b.md`, `role-c.md`, `role-d.md`
+## Guiding Rule
 
-Keep their responsibilities focused. The main shift is not their job descriptions; it is that `S` becomes the operator around them.
+If we have to choose between:
 
-## UI Direction
+- a more rigid pipeline
+- and a clearer supervisor-led team
 
-The UI should eventually support:
-
-- talking to `S` as the primary control surface
-- seeing worker activity underneath
-- explicit resume buttons
-- explicit stop-after-review / plan-only controls
-- clearer stalled-state messaging
-- pending approval visibility that `S` can summarize
-
-## Open Questions
-
-- Should `S` ever be allowed to trigger coding automatically, or should it always confirm before handing off to `C`?
-- Should plan-only and stop-after-review be first-class pipeline modes or supervisor directives on top of one pipeline mode?
-- Should planning be split immediately, or only after session persistence and resume land?
-- Should `S` use the same Claude model as workers, or a cheaper/faster operator model?
-
-## Recommended Next Build Order
-
-1. session persistence mid-turn
-2. idle watchdog + stalled-state UX
-3. resume planner/reviewer flow
-4. supervisor control actions
-5. `role-s.md` rewrite and UI changes
-6. sandbox runner work
-
-## Practical Note From Current Testing
-
-The current `v0.4` planning-only architecture experiment showed the exact pain this plan addresses:
-
-- `A` can complete expensive research
-- then stall before writing `plan.md`
-- leaving the user unsure whether to wait, reset, or intervene
-
-This plan is designed to make that kind of failure recoverable instead of wasteful.
+prefer the supervisor-led team, as long as we keep enough guardrails to preserve discipline and safety.

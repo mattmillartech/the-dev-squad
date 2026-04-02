@@ -2,7 +2,14 @@
 
 The orchestrator, agent roles, hooks, and templates that power The Dev Squad.
 
-See the [main README](../README.md) for full documentation.
+See the [main README](../README.md) for the product overview and [SUPERVISOR-BUILD-PLAN.md](../SUPERVISOR-BUILD-PLAN.md) for the current supervisor/operator build direction.
+
+The key idea is that this folder contains the team's shared operating system:
+
+- role files for the supervisor and specialists
+- the master build plan template
+- the shared checklist
+- the hook guardrails that keep the team disciplined
 
 ## Files
 

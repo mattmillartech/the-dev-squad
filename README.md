@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">The Dev Squad</h1>
-  <p align="center"><strong>5 Claude Code sessions that talk to each other to build software.</strong></p>
+  <p align="center"><strong>Give Claude its own dev team.</strong></p>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 
 ---
 
-> One plans. One reviews. One codes. One tests. One supervises. They communicate through structured signals, review each other's work, and loop until every step is right. The result is bulletproof plans that produce bulletproof builds.
+> One supervisor. Four specialists. One controlled build flow. They communicate through structured signals, review each other's work, and loop until every step is right. The result is bulletproof plans that produce bulletproof builds.
 >
 > No API keys. No per-token costs. All 5 sessions run on your Claude subscription.
 
@@ -44,6 +44,21 @@ This saves me hours every day.
 
 ---
 
+## What This Is
+
+The Dev Squad is moving toward a simple product idea:
+
+- you give Claude a dev team
+- `S` is the supervisor and recovery partner
+- `A`, `B`, `C`, and `D` are the specialists
+- the whole team follows the same doctrine: `build-plan-template.md`, `checklist.md`, and the approved `plan.md`
+
+Today, pipeline mode still starts with **A** in Phase 0. The long-term direction is for **S** to become the primary operator while the specialists do the actual planning, review, coding, and testing work. The current implementation already has the first recovery foundation for that direction: live turn tracking, stalled-turn visibility, and saved session ids for recovery.
+
+The implementation plan for that shift lives in [SUPERVISOR-BUILD-PLAN.md](SUPERVISOR-BUILD-PLAN.md).
+
+---
+
 ## The Agents
 
 | Agent | Role | What It Does |
@@ -52,23 +67,25 @@ This saves me hours every day.
 | **B** | Reviewer | Reads A's plan and tears it apart. Asks hard questions. Loops with A until there are zero gaps. |
 | **C** | Coder | Follows the approved plan exactly. Writes every file, installs deps, builds the project. No improvising. |
 | **D** | Tester | Reviews C's code against the plan, runs it, catches bugs. Loops with C until everything passes. |
-| **S** | Supervisor | Your diagnostic assistant. If something breaks or loops, S reads the event log and helps figure out what went wrong. |
+| **S** | Supervisor | Your supervisor and recovery partner. Today S helps inspect runs, explain what the team is doing, and diagnose stalls or loops. |
 
-Each agent is a separate Claude Code session running Claude Opus 4.6. They communicate through structured JSON signals routed by an orchestrator. Restrictions are enforced by a `PreToolUse` hook — a guardrail that prevents agents from accidentally drifting out of their lane. See [SECURITY.md](SECURITY.md) for the threat model and known limitations.
+Each agent is a separate Claude Code session running Claude Opus 4.6. They communicate through structured JSON signals routed by an orchestrator. Restrictions are enforced by a `PreToolUse` hook, but the real product idea is the team structure plus the shared doctrine: the build plan template, the checklist, and the locked plan. See [SECURITY.md](SECURITY.md) for the threat model and known limitations.
 
 ## How It Works
 
 ```
 1. Open the viewer
-2. Chat with Agent A — describe what you want to build
+2. Chat with Agent A — today, Phase 0 still starts here
 3. Hit START
 4. Watch 5 agents build it autonomously by default
 5. Your project is in ~/Builds/
 ```
 
+The product direction is to let you talk primarily to **S** and let **S** direct the team for you. The current implementation is the first step toward that model, not the final form yet.
+
 **Phase 0: Concept** — You talk to Agent A. Describe what you want. A asks clarifying questions until the scope is clear. This is the only required human interaction in fast mode; strict mode can still ask for Bash approvals later.
 
-**Phase 1: Planning** — A reads the build plan template, researches the concept (web searches, docs, source code), writes `plan.md` with complete, copy-pasteable code for every file, then does one self-review pass before handing it to B. No placeholders.
+**Phase 1: Planning** — A reads the build plan template and checklist, researches the concept (web searches, docs, source code), writes `plan.md` with complete, copy-pasteable code for every file, then does one self-review pass before handing it to B. No placeholders.
 
 **Phase 1b: Plan Review** — B reads the plan and sends structured questions back to A. They loop until B is fully satisfied and approves. The plan is locked. No agent can modify it.
 
@@ -88,6 +105,7 @@ A pixel art office where 5 agents sit at desks. You watch them work in real-time
 
 - **Live Feed** — Every event from every agent, timestamped and color-coded
 - **Dashboard** — Phase progress, elapsed time, file count, errors
+- **Current Turn** — Shows which agent turn is active, what it is doing, and whether it looks stalled
 - **5-Panel Grid** — S (supervisor) panel on the left, A/B/C/D on the right. Each panel shows that agent's activity with auto-scroll. Click any panel to expand.
 - **Per-Panel Chat** — Each panel has its own input. Talk directly to any agent.
 - **Controls** — START, STOP, Reset, View Plan
@@ -146,6 +164,7 @@ Strict mode is for users who want a human in the loop for shell execution from t
 - **What happens on approve** — The exact approved command gets a one-time grant and runs once
 - **What happens on deny** — The agent is told the command was denied and must continue without it or explain what is blocked
 - **What does not change** — Strict mode improves practical safety, but it is not OS-level sandboxing. The known hook limitations in [SECURITY.md](SECURITY.md) still apply.
+- **What this is not** — Strict mode does not change the team model. It just adds human approval on risky shell execution.
 
 ### Manual Mode
 
@@ -173,7 +192,7 @@ Once the build is complete, you can chat directly with any agent for post-build 
 
 ### The Supervisor (S Panel)
 
-The S panel on the left is **not** part of the pipeline. S is your diagnostic assistant. If something breaks, stalls, or loops, type in the S panel to ask what went wrong. S can read the event log, the plan, the code, and help you figure out the issue. You don't need to use S during a normal build — it's there when things go sideways.
+The S panel on the left is the beginning of the "Claude with a dev team" model. Today, S is not yet the full control plane, but S is already your supervisor and recovery partner. If something breaks, stalls, loops, or looks suspicious, ask S what is happening. S can read the event log, the plan, the code, and help you decide whether to wait, stop, retry, or recover.
 
 ### Controls Reference
 

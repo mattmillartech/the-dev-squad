@@ -1,6 +1,10 @@
 # Build Plan Template
 
-When you receive a build concept from the user, ask any clarifying questions you need before starting. Once the concept is clear, follow this process. After this point, the pipeline runs autonomously — no human gates, no approvals needed.
+When you receive a build concept from the user, ask any clarifying questions you need before starting. Once the concept is clear, follow this process.
+
+This document is not just A's personal prompt. It is part of the team's shared doctrine. `A` uses it to write, `B` uses it to review, `C` uses it to understand the implementation contract, `D` uses it to test against intent, and `S` uses it to keep the team aligned.
+
+After planning starts, the team usually runs forward autonomously in fast mode. Strict mode can still surface approval prompts later.
 
 ---
 
@@ -19,6 +23,12 @@ If you can't verify something, don't put it in the plan. Research until you can.
 ## 4. Give the Coder Full Context
 
 The coder session must understand what it's building, why, and how it fits into the existing codebase. Include what files to read and research before starting if necessary. The coder should be able to build without asking a single question.
+
+The rest of the team should also be able to understand the plan:
+
+- `B` should be able to audit it without guessing
+- `D` should be able to review and test against it without inventing missing context
+- `S` should be able to explain what the team is doing from it
 
 ## 5. Self-Review Once
 
@@ -55,7 +65,7 @@ When you think the plan is review-ready, send it to B (Plan Reviewer). B will po
 - [ ] Coder has full context — knows what to read, research, and build before starting
 - [ ] Coder can build without asking a single question
 
-### Review
+### Review And Team Handoff
 - [ ] One self-review pass completed
 - [ ] Plan is review-ready and complete enough for B to audit
 - [ ] Sent to B (Plan Reviewer) for review

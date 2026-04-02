@@ -1,6 +1,8 @@
 # Pipeline Checklist
 
-This checklist travels with the build. Each agent checks off their section before passing it forward. No agent can move to the next phase until the previous section is fully checked off.
+This checklist travels with the build. Each agent checks off their section before passing it forward. No agent should move to the next phase until the previous section is fully checked off.
+
+This is not just pipeline paperwork. It is part of the team's shared doctrine. The supervisor, planner, reviewer, coder, and tester should all treat it as the operating system for the build.
 
 Every handoff includes a message. The message format is specified at each handoff point — follow it exactly.
 
@@ -32,6 +34,8 @@ If A needs clarification:
 > 1. _(question)_
 
 User answers, A continues. This is usually the last direct human interaction in fast mode. In strict mode, the UI can still surface Bash approvals later.
+
+Today the pipeline still starts with A in Phase 0. The product direction is for S to become the primary manager/operator above the rest of the team.
 
 ---
 
@@ -84,6 +88,8 @@ User answers, A continues. This is usually the last direct human interaction in 
 > **What I researched:** _(list sources read — docs, source code, web)_
 > **What I verified:** _(list what was confirmed from source)_
 > **What the coder needs to know:** _(key context for C)_
+
+The goal is not just "hand B a file." The goal is to hand the team a plan that the rest of the build can trust.
 
 ---
 

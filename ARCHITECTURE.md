@@ -1,14 +1,24 @@
 # Architecture
 
-5 agents. Two modes. In **Pipeline Mode**, agents pass work back and forth autonomously until it's perfect. In **Manual Mode**, you are the orchestrator — 5 Claude sessions with expertise labels, no automation, you direct everything.
+One supervisor. Four specialists. Two modes. In **Pipeline Mode**, the team passes work back and forth until it's right. In **Manual Mode**, you are the orchestrator — 5 Claude sessions with expertise labels, no automation, you direct everything.
 
 ## The Agents
 
-- **S — Supervisor**: Assists the user in overseeing the pipeline. Reads everything. Diagnoses issues. Not part of the autonomous flow — available on demand.
+- **S — Supervisor**: The operator/recovery partner. Reads broadly, explains what the team is doing, and helps the user decide when to wait, stop, retry, or recover.
 - **A — Planner**: Chats with the user, researches, writes the build plan, and confirms completion at the end
 - **B — Plan Reviewer**: Pokes holes in the plan until there are none left
 - **C — Coder**: Follows the approved plan and writes the code
 - **D — Code Reviewer + Tester**: Reviews the code against the plan, then tests it
+
+## Product Direction
+
+The product is moving toward "give Claude a dev team":
+
+- `S` is the human-facing supervisor
+- `A`, `B`, `C`, and `D` are the worker specialists
+- the whole team follows the same doctrine: `build-plan-template.md`, `checklist.md`, and the locked `plan.md`
+
+Today, pipeline mode still starts with **A** in Phase 0 and `S` is primarily a recovery/diagnostic surface. The next implementation step is to make `S` the primary operator while keeping control authority in deterministic host/orchestrator code. The concrete build plan for that transition lives in [SUPERVISOR-BUILD-PLAN.md](SUPERVISOR-BUILD-PLAN.md).
 
 ## The Flow
 
@@ -119,7 +129,8 @@ claude -p "<prompt>" \
 - `--permission-mode auto` — Claude's AI classifier handles general safety
 - `--output-format stream-json` — real-time streaming for the viewer
 - `PIPELINE_AGENT` env var — tells the hook which agent is running
-- Role files provide context (what the agent's job is), hooks provide law (what the agent can do)
+- Role files and shared doctrine provide the team model; hooks provide the lighter safety/discipline guardrails around it
+- Session ids are now persisted mid-turn so stalled A/B runs can be recovered instead of always forcing a reset
 - Future hardening replaces direct host spawning with a sandbox runner; see [SECURITY-ROADMAP.md](SECURITY-ROADMAP.md)
 
 ## The Orchestrator
@@ -131,7 +142,8 @@ claude -p "<prompt>" \
 3. Routes structured signals between agents
 4. Advances the pipeline phase on approval signals
 5. Tracks token usage, costs, and events
-6. Writes everything to `pipeline-events.json` for the viewer
+6. Persists active-turn runtime state and recoverable session ids
+7. Writes everything to `pipeline-events.json` for the viewer
 
 The orchestrator cannot be confused, distracted, or convinced to skip steps.
 
@@ -142,6 +154,7 @@ A Next.js app that polls `pipeline-events.json` every 400ms and renders:
 - Pixel art office scene with 5 agents at desks
 - Live feed of all events
 - 5-panel grid (S + A/B/C/D) with per-agent event streams
+- Current-turn and stalled-turn visibility for recovery
 - Dashboard with phase progress, token usage, cost
 - Per-panel chat inputs for direct agent communication
 - START/STOP/Reset controls
@@ -198,7 +211,7 @@ User hits RESET
      │     D     │  reviewer + tester — talks to C (fixes) and A (final)
      └───────────┘
 
-     S sits above — available when things go sideways
+     S sits above — supervisor / recovery partner for the team
 
      After Phase 0, pipeline runs autonomous by default
      Strict mode can still surface approval prompts for C/D Bash

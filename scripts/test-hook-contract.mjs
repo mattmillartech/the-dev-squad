@@ -190,6 +190,16 @@ const checks = [
     run: () => invokeHook({ agent: 'D', toolName: 'Bash', toolInput: { command: 'pwd' }, securityMode: 'fast' }),
   },
   {
+    name: 'D fast-mode Bash can mention .claude without being blocked',
+    expect: 'allow',
+    run: () => invokeHook({
+      agent: 'D',
+      toolName: 'Bash',
+      securityMode: 'fast',
+      toolInput: { command: "python3 -c \"print('.claude is just a string here')\"" },
+    }),
+  },
+  {
     name: 'D Bash asks in strict mode',
     expect: 'ask',
     run: () => invokeHook({ agent: 'D', toolName: 'Bash', toolInput: { command: 'pwd' }, securityMode: 'strict' }),
