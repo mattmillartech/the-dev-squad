@@ -41,9 +41,10 @@ export async function POST(req: NextRequest) {
         try {
           const eventsFile = join(dir, 'pipeline-events.json');
           const state = JSON.parse(readFileSync(eventsFile, 'utf8'));
-          if (state.currentPhase && state.currentPhase !== 'concept' && !state.buildComplete) {
+          if (state.currentPhase && state.currentPhase !== 'concept') {
             state.currentPhase = 'concept';
             state.activeAgent = '';
+            state.buildComplete = false;
             state.agentStatus = { A: 'idle', B: 'idle', C: 'idle', D: 'idle', S: 'idle' };
             writeFileSync(eventsFile, JSON.stringify(state, null, 2));
           }
