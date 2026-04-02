@@ -21,7 +21,18 @@
 # DEFAULT: DENY (any unrecognized tool is blocked, not allowed)
 #
 
-INPUT=$(cat)
+# Claude can occasionally invoke the hook in a context where stdin is not
+# closed yet. Avoid hanging forever on an empty bootstrap/probe invocation.
+# Read a single byte first so JSON payloads without a trailing newline still
+# count as real input instead of timing out.
+if IFS= read -r -t 1 -n 1 FIRST_CHAR; then
+  REST=$(cat)
+  INPUT="${FIRST_CHAR}${REST}"
+else
+  echo '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}'
+  exit 0
+fi
+
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name')
 TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input')
 CWD=$(echo "$INPUT" | jq -r '.cwd')

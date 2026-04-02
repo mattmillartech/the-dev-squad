@@ -11,6 +11,7 @@
     "test:hook": "node scripts/test-hook-contract.mjs",
     "test:signals": "node --experimental-strip-types scripts/test-structured-output-parser.mjs",
     "test:runtime": "node --experimental-strip-types scripts/test-pipeline-runtime.mjs",
+    "test:planning": "node --experimental-strip-types scripts/test-pipeline-planning.mjs",
     "test:supervisor": "node --experimental-strip-types scripts/test-supervisor-snapshot.mjs",
     "test:supervisor-concept": "node --experimental-strip-types scripts/test-supervisor-concept.mjs",
     "test:supervisor-intents": "node --experimental-strip-types scripts/test-supervisor-intents.mjs"

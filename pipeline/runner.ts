@@ -1,7 +1,8 @@
 import { execFileSync, spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 
 export type PipelineAgentId = 'A' | 'B' | 'C' | 'D' | 'S';
 export type RunnerMode = 'host' | 'docker' | 'auto';
@@ -41,9 +42,107 @@ export interface Runner {
 }
 
 const DOCKER_IMAGE = 'dev-squad-agent:latest';
+const KEYCHAIN_SERVICE_NAME = 'Claude Code-credentials';
+
+export interface DockerCredentialBootstrap {
+  source: 'none' | 'host-credentials-file' | 'macos-keychain';
+  mountArgs: string[];
+  cleanup: () => void;
+}
 
 function hasValue(value: string | undefined): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+export function hasUsableCredentialsFile(filePath: string): boolean {
+  if (!existsSync(filePath)) return false;
+  try {
+    return statSync(filePath).size > 4;
+  } catch {
+    return false;
+  }
+}
+
+function readHostClaudeStateJson(): string {
+  const statePath = join(homedir(), '.claude.json');
+  let state: Record<string, unknown> = {};
+
+  if (existsSync(statePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        state = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Fall back to a minimal state file below.
+    }
+  }
+
+  state.hasCompletedOnboarding = true;
+  return JSON.stringify(state, null, 2);
+}
+
+export function createCredentialBootstrap(
+  credentialsJson: string,
+  source: DockerCredentialBootstrap['source'],
+  claudeStateJson = readHostClaudeStateJson(),
+): DockerCredentialBootstrap {
+  const tempDir = mkdtempSync(join(tmpdir(), 'devsquad-claude-'));
+  const claudeDir = join(tempDir, '.claude');
+  const credentialsPath = join(claudeDir, '.credentials.json');
+  const claudeStatePath = join(tempDir, '.claude.json');
+
+  mkdirSync(claudeDir, { recursive: true });
+  writeFileSync(credentialsPath, credentialsJson, { mode: 0o600 });
+  writeFileSync(claudeStatePath, claudeStateJson, { mode: 0o600 });
+
+  return {
+    source,
+    mountArgs: [
+      '-v', `${credentialsPath}:/home/node/.claude/.credentials.json:ro`,
+      '-v', `${claudeStatePath}:/home/node/.claude.json`,
+    ],
+    cleanup: () => {
+      rmSync(tempDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function readMacOsKeychainCredentials(): string | null {
+  if (process.platform !== 'darwin') return null;
+
+  try {
+    const output = execFileSync(
+      'security',
+      ['find-generic-password', '-s', KEYCHAIN_SERVICE_NAME, '-w'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    ).trim();
+
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveDockerCredentialBootstrap(): DockerCredentialBootstrap {
+  const hostCredentialsPath = join(homedir(), '.claude', '.credentials.json');
+  if (hasUsableCredentialsFile(hostCredentialsPath)) {
+    return createCredentialBootstrap(
+      readFileSync(hostCredentialsPath, 'utf8'),
+      'host-credentials-file'
+    );
+  }
+
+  const keychainCredentials = readMacOsKeychainCredentials();
+  if (keychainCredentials) {
+    return createCredentialBootstrap(keychainCredentials, 'macos-keychain');
+  }
+
+  return {
+    source: 'none',
+    mountArgs: [],
+    cleanup: () => {},
+  };
 }
 
 function projectHash(projectDir: string): string {
@@ -146,6 +245,10 @@ function buildContainerClaudeArgs(opts: RunnerOptions): string[] {
   return args;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
 export function buildRunnerEnv(opts: RunnerOptions): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -161,6 +264,10 @@ export function buildRunnerEnv(opts: RunnerOptions): NodeJS.ProcessEnv {
 
   if (hasValue(opts.securityMode)) {
     env.PIPELINE_SECURITY_MODE = opts.securityMode;
+  }
+
+  if (opts.pipelineAgent === 'C' || opts.pipelineAgent === 'D') {
+    env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1';
   }
 
   return env;
@@ -182,14 +289,17 @@ function withBackend(child: RunnerChild, backend: RunnerBackend): SpawnedRunnerC
   return Object.assign(child, { backend });
 }
 
-function buildDockerArgs(opts: RunnerOptions): string[] {
+function buildDockerArgs(
+  opts: RunnerOptions,
+  authBootstrap: DockerCredentialBootstrap,
+): string[] {
   const agentLabel = opts.pipelineAgent || 'session';
   const containerProject = `/home/node/Builds/${basename(opts.projectDir)}`;
   const containerName = `devsquad-${projectHash(opts.projectDir)}-${agentLabel}-${Date.now()}`;
   const sessionVolume = `devsquad-sessions-${projectHash(opts.projectDir)}-${agentLabel}`;
   const projectAccess = getProjectMountMode(opts.pipelineAgent);
   const dockerArgs: string[] = [
-    'run', '--rm', '-i',
+    'run', '--rm',
     '--name', containerName,
     '-v', `${opts.projectDir}:${containerProject}:${projectAccess}`,
     '-v', `${sessionVolume}:/home/node/.claude`,
@@ -215,8 +325,11 @@ function buildDockerArgs(opts: RunnerOptions): string[] {
     dockerArgs.push('-v', `${file}:/opt/pipeline/${basename(file)}:ro`);
   }
 
+  dockerArgs.push(...authBootstrap.mountArgs);
+
   dockerArgs.push('--cap-add=NET_ADMIN', '--cap-add=NET_RAW');
   dockerArgs.push('-e', 'ANTHROPIC_API_KEY');
+  dockerArgs.push('-e', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1');
 
   if (hasValue(opts.pipelineAgent)) {
     dockerArgs.push('-e', `PIPELINE_AGENT=${opts.pipelineAgent}`);
@@ -228,7 +341,24 @@ function buildDockerArgs(opts: RunnerOptions): string[] {
 
   dockerArgs.push('-e', 'CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1');
   dockerArgs.push('-e', `AGENT_NETWORK_PROFILE=${getNetworkProfile(opts.pipelineAgent)}`);
-  dockerArgs.push(DOCKER_IMAGE, 'claude', ...buildContainerClaudeArgs(opts));
+
+  const claudeCommand = [
+    '/usr/local/share/npm-global/bin/claude',
+    ...buildContainerClaudeArgs(opts),
+  ].map(shellQuote).join(' ');
+
+  const wrappedCommand = [
+    'OUT=$(mktemp)',
+    'ERR=$(mktemp)',
+    `${claudeCommand} >"$OUT" 2>"$ERR"`,
+    'RC=$?',
+    'cat "$OUT"',
+    'cat "$ERR" >&2',
+    'rm -f "$OUT" "$ERR"',
+    'exit "$RC"',
+  ].join('; ');
+
+  dockerArgs.push(DOCKER_IMAGE, 'sh', '-lc', wrappedCommand);
 
   return dockerArgs;
 }
@@ -258,13 +388,27 @@ export class HostRunner implements Runner {
 
 export class DockerRunner implements Runner {
   spawn(opts: RunnerOptions): SpawnedRunnerChild {
-    return withBackend(nodeSpawn('docker', buildDockerArgs(opts), {
+    const authBootstrap = resolveDockerCredentialBootstrap();
+    const dockerCommand = ['docker', ...buildDockerArgs(opts, authBootstrap)].map(shellQuote).join(' ');
+    const child = nodeSpawn('/bin/sh', ['-lc', dockerCommand], {
       cwd: opts.projectDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
       },
-    }), 'docker');
+    });
+
+    let cleanedUp = false;
+    const cleanupBootstrap = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      authBootstrap.cleanup();
+    };
+
+    child.on('close', cleanupBootstrap);
+    child.on('error', cleanupBootstrap);
+
+    return withBackend(child, 'docker');
   }
 
   async cleanup(projectDir: string): Promise<void> {

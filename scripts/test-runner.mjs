@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   AutoRunner,
@@ -6,9 +9,11 @@ import {
   HostRunner,
   buildClaudeArgs,
   buildRunnerEnv,
+  createCredentialBootstrap,
   createRunner,
   getNetworkProfile,
   getProjectMountMode,
+  hasUsableCredentialsFile,
   isRecoverableDockerAuthFailure,
   shouldPreferDocker,
 } from '../pipeline/runner.ts';
@@ -71,6 +76,28 @@ assert.equal(getNetworkProfile('S'), 'none');
 assert.equal(isRecoverableDockerAuthFailure('Not logged in · Please run /login'), true);
 assert.equal(isRecoverableDockerAuthFailure('Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error"}}'), true);
 assert.equal(isRecoverableDockerAuthFailure('Tool execution failed for a different reason'), false);
+
+const credentialsTmp = mkdtempSync(join(tmpdir(), 'runner-creds-'));
+const placeholderPath = join(credentialsTmp, 'placeholder.json');
+const realCredsPath = join(credentialsTmp, 'real.json');
+writeFileSync(placeholderPath, '{}');
+writeFileSync(realCredsPath, '{"oauth_token":"abc"}');
+assert.equal(hasUsableCredentialsFile(join(credentialsTmp, 'missing.json')), false);
+assert.equal(hasUsableCredentialsFile(placeholderPath), false);
+assert.equal(hasUsableCredentialsFile(realCredsPath), true);
+
+const bootstrap = createCredentialBootstrap(
+  '{"oauth_token":"abc"}',
+  'macos-keychain',
+  '{"hasCompletedOnboarding":true}'
+);
+assert.equal(bootstrap.source, 'macos-keychain');
+assert.equal(bootstrap.mountArgs.length, 4);
+assert.ok(bootstrap.mountArgs[1].includes('/home/node/.claude/.credentials.json:ro'));
+assert.ok(bootstrap.mountArgs[3].includes('/home/node/.claude.json'));
+assert.match(readFileSync(bootstrap.mountArgs[1].split(':')[0], 'utf8'), /oauth_token/);
+bootstrap.cleanup();
+rmSync(credentialsTmp, { recursive: true, force: true });
 
 assert.ok(createRunner('host') instanceof HostRunner);
 assert.ok(createRunner('auto') instanceof AutoRunner);

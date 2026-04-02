@@ -41,6 +41,15 @@ import {
   summarizePrompt,
   type PipelineRuntimeState,
 } from '../src/lib/pipeline-runtime.ts';
+import {
+  buildPlanningResearchPrompt,
+  buildPlanningResearchResumePrompt,
+  buildPlanningSelfReviewPrompt,
+  buildPlanningSelfReviewResumePrompt,
+  buildPlanningWritePrompt,
+  buildPlanningWriteResumePrompt,
+  detectPlanningStep,
+} from '../src/lib/pipeline-planning.ts';
 import { createRunner, isRecoverableDockerAuthFailure } from './runner.ts';
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -677,6 +686,7 @@ async function claude(
     role: string;
     resume?: string;
     jsonSchema?: Record<string, unknown>;
+    resumePrompt?: string;
   }
 ): Promise<{ result: string; sessionId: string; structured: Record<string, unknown> | null }> {
   let currentPrompt = prompt;
@@ -712,7 +722,7 @@ async function claude(
       if (turn.sessionId && canAutoResumeTurn(agent, state.currentPhase) && autoResumeCount < MAX_AUTO_RESUMES) {
         autoResumeCount += 1;
         currentResume = turn.sessionId;
-        currentPrompt = buildResumePrompt(agent, state.currentPhase);
+        currentPrompt = opts.resumePrompt || buildResumePrompt(agent, state.currentPhase);
         emit('system', state.currentPhase, 'status', `Resuming Agent ${agent} from the saved session`);
         emitSupervisor(
           state.currentPhase,
@@ -884,59 +894,82 @@ function buildPhase0Context() {
     phase0Events.map((event) => `${event.agent}: ${event.text}`).join('\n') + '\n\n';
 }
 
-function buildPlanPrompt() {
-  const phase0Context = buildPhase0Context();
-
-  return [
-    phase0Context
-      ? phase0Context + 'Based on the conversation above, build the plan now.'
-      : `Build concept from the user: ${concept}`,
-    '',
-    'YOUR ONLY JOB RIGHT NOW: Write a build plan to plan.md. That is it.',
-    '',
-    'Follow these steps exactly:',
-    '1. Read build-plan-template.md in this directory. Follow it step by step.',
-    '2. Research the concept — read docs, source code, web search, verify packages.',
-    `3. Write the build plan to ${join(projectDir, 'plan.md')}`,
-    '4. The plan must have complete, copy-pasteable code for every file.',
-    '5. No descriptions — only code. The coder must build without asking a single question.',
-    '6. Do one full self-review pass. Read the plan back once as a fresh session, fill any gaps you find, then stop.',
-    '7. When plan.md is complete and review-ready, say "Plan complete" and STOP.',
-    '',
-    'RULES:',
-    '- You are ONLY writing plan.md. Do NOT write any other files.',
-    '- Do NOT write index.html, app.js, or any code files. That is the CODER\'s job.',
-    '- Do NOT create the actual project. Only the PLAN.',
-    '- Use Read/Glob/Grep to inspect the workspace. Do NOT use Bash just to list files or inspect the project directory.',
-    '- Do NOT use the Agent tool. Do NOT spawn sub-agents.',
-    '- Do NOT send the plan to anyone. The orchestrator handles that.',
-    '- Do not take shortcuts. Do not guess. Verify everything from source.',
-  ].join('\n');
-}
-
 async function runPlanningPhase(aSession: string, options?: { resumeStalled?: boolean }): Promise<string> {
   setPhase('planning');
   setPipelineStatus('running');
   setAgent('A', 'active');
+  const phase0Context = buildPhase0Context();
+  const existingPlanPath = join(projectDir, 'plan.md');
+  let step = detectPlanningStep(state.events, { planExists: existsSync(existingPlanPath) });
+  const resumeSession = aSession || state.runtime.activeTurn?.sessionId || state.sessions.A;
 
   if (options?.resumeStalled) {
     emit('system', 'planning', 'status', 'Supervisor resumed A from the saved planning session');
     emitSupervisor('planning', 'I resumed the planner from the saved session so we do not have to throw away the research and start over.');
-  } else {
-    emit('A', 'planning', 'status', 'Starting research and plan writing...');
-    emitSupervisor('planning', 'The planner is researching and writing the build plan now. I will keep the team in planning until the plan is solid enough for review.');
   }
 
-  const prompt = options?.resumeStalled ? buildResumePrompt('A', 'planning') : buildPlanPrompt();
-  const aResult = await claude('A', prompt, {
-    role: ROLE_A,
-    resume: options?.resumeStalled ? (aSession || state.runtime.activeTurn?.sessionId || state.sessions.A) : undefined,
-  });
+  if (step === 'research') {
+    emit('A', 'planning', 'status', options?.resumeStalled ? 'Resuming research pass...' : 'Starting research pass...');
+    emitSupervisor(
+      'planning',
+      'The planner is finishing the research pass first so the plan can be written from verified facts instead of guesses.'
+    );
 
-  aSession = aResult.sessionId;
-  saveSession('A', aSession);
+    const researchResult = await claude('A', buildPlanningResearchPrompt(phase0Context, concept), {
+      role: ROLE_A,
+      resume: options?.resumeStalled ? resumeSession : undefined,
+      resumePrompt: buildPlanningResearchResumePrompt(),
+    });
+    aSession = researchResult.sessionId;
+    saveSession('A', aSession);
 
-  if (!existsSync(join(projectDir, 'plan.md'))) {
+    step = detectPlanningStep(state.events, { planExists: existsSync(existingPlanPath) });
+    if (step === 'research') step = 'write';
+  }
+
+  if (step === 'write') {
+    emit('A', 'planning', 'status', 'Writing plan.md...');
+    emitSupervisor(
+      'planning',
+      'Research is complete. The planner is drafting plan.md now in a dedicated write step so we do not lose the work between research and output.'
+    );
+
+    const writeResult = await claude('A', buildPlanningWritePrompt(projectDir), {
+      role: ROLE_A,
+      resume: aSession || (options?.resumeStalled ? resumeSession : undefined),
+      resumePrompt: buildPlanningWriteResumePrompt(projectDir),
+    });
+    aSession = writeResult.sessionId;
+    saveSession('A', aSession);
+
+    if (!existsSync(existingPlanPath)) {
+      emit('A', 'planning', 'failure', 'Did not write plan.md');
+      throw new Error('Agent A did not write plan.md');
+    }
+
+    step = detectPlanningStep(state.events, { planExists: true });
+    if (step !== 'done') step = 'self-review';
+  }
+
+  if (step === 'self-review') {
+    emit('A', 'planning', 'status', 'Self-reviewing plan.md...');
+    emitSupervisor(
+      'planning',
+      'The planner has a draft. It is doing one focused self-review pass before handing the plan to the reviewer.'
+    );
+
+    const reviewResult = await claude('A', buildPlanningSelfReviewPrompt(projectDir), {
+      role: ROLE_A,
+      resume: aSession || (options?.resumeStalled ? resumeSession : undefined),
+      resumePrompt: buildPlanningSelfReviewResumePrompt(projectDir),
+    });
+    aSession = reviewResult.sessionId;
+    saveSession('A', aSession);
+
+    emit('A', 'planning', 'status', 'Plan self-review complete');
+  }
+
+  if (!existsSync(existingPlanPath)) {
     emit('A', 'planning', 'failure', 'Did not write plan.md');
     throw new Error('Agent A did not write plan.md');
   }

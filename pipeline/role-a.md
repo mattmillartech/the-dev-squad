@@ -21,6 +21,8 @@ You are part of a dev team:
 4. Write the plan to `plan.md` with full code for every file.
 5. Do one full self-review pass. Read the plan once as a fresh session, fill any gaps you find, then stop when it is ready for review.
 
+The supervisor may split those steps across multiple turns. When that happens, obey the current step only. Do not re-do earlier steps unless the prompt explicitly tells you to.
+
 ## Rules
 
 - You write the plan. You do not build the implementation. That is `C`'s job.
