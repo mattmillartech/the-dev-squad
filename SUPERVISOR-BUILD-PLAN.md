@@ -161,6 +161,8 @@ Goal: make the current product feel like a supervised dev team instead of a rigi
 
 Goal: let `S` actually manage the team instead of only diagnosing it.
 
+Status: foundation shipped in `0.3.0+`.
+
 ### Deliverables
 
 - plan-only control
@@ -173,6 +175,14 @@ Goal: let `S` actually manage the team instead of only diagnosing it.
 
 - the user can mostly talk to `S`
 - `S` can manage the build without the user manually reasoning about the pipeline
+
+### What Is Already Live
+
+- `plan-only` start mode
+- `stop after review` toggle during planning/review
+- `continue build` from an approved paused plan
+- `resume stalled run` for saved A/B planning-review turns
+- dashboard badges and current-turn visibility that make those controls legible
 
 ## Phase 3: Recovery + Smaller Work Units
 
@@ -208,15 +218,15 @@ Goal: strengthen containment without changing the dev-team product model.
 
 ## Current Implementation Recommendation
 
-Implement Phase 1 now.
+Phase 1 and the first slice of Phase 2 are now in place. The next recommendation is to keep building out the supervisor model from there.
 
 That means:
 
-1. rewrite the roles around the dev-team model
-2. rewrite the template/checklist around shared doctrine
-3. refresh the docs around "Claude with a dev team"
-4. keep the current recovery work and strict mode
-5. defer deeper control-plane and sandbox work to later phases
+1. deepen `S` as the primary human-facing operator
+2. improve run summaries and decision support for `S`
+3. keep the current recovery work and strict mode
+4. continue reducing user dependence on raw pipeline mechanics
+5. defer deeper sandbox work to later phases
 
 ## Non-Goals
 

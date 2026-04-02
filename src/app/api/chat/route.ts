@@ -5,6 +5,8 @@ import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { NextRequest, NextResponse } from 'next/server';
 import { EMPTY_RUNTIME } from '@/lib/pipeline-runtime';
+import { readPendingApproval } from '@/lib/pipeline-approval';
+import { buildSupervisorSnapshot } from '@/lib/pipeline-supervisor';
 
 const BUILDUI_DIR = resolve(process.cwd(), 'pipeline');
 const BUILDS_DIR = join(homedir(), 'Builds');
@@ -288,8 +290,20 @@ function handlePipeline(agent: string, message: string) {
   const safeMessage = message.startsWith('-') ? 'User says: ' + message : message;
   const buildComplete = !!state.buildComplete;
   let finalMessage = safeMessage;
+  if (agent === 'S') {
+    const pendingApproval = projectDir !== STAGING_DIR ? readPendingApproval(projectDir) : null;
+    finalMessage = [
+      buildSupervisorSnapshot(state, pendingApproval),
+      '',
+      'Use the live snapshot above as the source of truth for the team state.',
+      'Answer as the supervisor/operator for the dev team.',
+      'Lead with one concrete recommendation when the user asks what to do next.',
+      '',
+      safeMessage,
+    ].join('\n');
+  }
   if (buildComplete) {
-    finalMessage = '[The build pipeline has completed. The user is chatting with you directly for post-build work — reviewing, fixing, or modifying the project.]\n\n' + safeMessage;
+    finalMessage = '[The build pipeline has completed. The user is chatting with you directly for post-build work — reviewing, fixing, or modifying the project.]\n\n' + finalMessage;
   }
 
   const events = (state.events as Array<Record<string, unknown>>) || [];

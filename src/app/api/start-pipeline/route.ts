@@ -17,9 +17,11 @@ export async function POST(req: NextRequest) {
   }
 
   let securityMode = 'fast';
+  let runGoal = 'full-build';
   try {
     const body = await req.json();
     if (body?.securityMode === 'strict') securityMode = 'strict';
+    if (body?.runGoal === 'plan-only') runGoal = 'plan-only';
   } catch {}
 
   // Read staging state — this is where Phase 0 chat lives
@@ -74,6 +76,10 @@ export async function POST(req: NextRequest) {
   // Move staging state to real project, update projectDir
   stagingState.projectDir = projectDir;
   stagingState.securityMode = securityMode;
+  stagingState.runGoal = runGoal;
+  stagingState.stopAfterPhase = runGoal === 'plan-only' ? 'plan-review' : 'none';
+  stagingState.pipelineStatus = 'running';
+  stagingState.resumeAction = 'none';
   writeFileSync(join(projectDir, 'pipeline-events.json'), JSON.stringify(stagingState, null, 2));
 
   // Clear staging
@@ -92,5 +98,5 @@ export async function POST(req: NextRequest) {
   orchestratorProcess.stderr?.on('data', (data) => process.stderr.write(data));
   orchestratorProcess.on('close', () => { orchestratorProcess = null; });
 
-  return NextResponse.json({ success: true, projectDir, securityMode });
+  return NextResponse.json({ success: true, projectDir, securityMode, runGoal });
 }

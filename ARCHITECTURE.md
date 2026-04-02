@@ -18,7 +18,9 @@ The product is moving toward "give Claude a dev team":
 - `A`, `B`, `C`, and `D` are the worker specialists
 - the whole team follows the same doctrine: `build-plan-template.md`, `checklist.md`, and the locked `plan.md`
 
-Today, pipeline mode still starts with **A** in Phase 0 and `S` is primarily a recovery/diagnostic surface. The next implementation step is to make `S` the primary operator while keeping control authority in deterministic host/orchestrator code. The concrete build plan for that transition lives in [SUPERVISOR-BUILD-PLAN.md](SUPERVISOR-BUILD-PLAN.md).
+Today, pipeline mode still starts with **A** in Phase 0 and `S` is primarily a recovery/diagnostic surface. The first supervisor controls are now live: saved-session recovery for A/B planning-review turns, `plan-only`, `stop after review`, and `continue build` from an approved plan. The next implementation step is to make `S` the primary operator while keeping control authority in deterministic host/orchestrator code. The concrete build plan for that transition lives in [SUPERVISOR-BUILD-PLAN.md](SUPERVISOR-BUILD-PLAN.md).
+
+When the user chats with `S` in pipeline mode, the chat route now injects a live team snapshot: current phase, pipeline status, run goal, active turn, recent events, pending approvals, and recommended control actions. That makes `S` much closer to a real team manager instead of a generic diagnostic assistant.
 
 ## The Flow
 
@@ -42,27 +44,28 @@ Today, pipeline mode still starts with **A** in Phase 0 and `S` is primarily a r
 10. **A** answers with verified information and updates the plan.
 11. This loops until **B** is fully satisfied. No round limit.
 12. **B** approves. The plan is locked — no agent can modify it from this point.
+13. If the supervisor selected **Plan Only** or armed **Stop After Review**, the pipeline pauses here and waits for an explicit continue command.
 
 ### Phase 2: Coding
 
-13. **C** reads the locked plan and builds exactly what it says.
-14. No improvising, no interpreting, no "improving."
+14. **C** reads the locked plan and builds exactly what it says.
+15. No improvising, no interpreting, no "improving."
 
 ### Phase 3: Code Review
 
-15. **D** reads the plan and the code. Checks: does the code match the plan?
-16. If **D** has issues, sends them to **C**. **C** fixes, sends back.
-17. Loops until **D** is satisfied with the code.
+16. **D** reads the plan and the code. Checks: does the code match the plan?
+17. If **D** has issues, sends them to **C**. **C** fixes, sends back.
+18. Loops until **D** is satisfied with the code.
 
 ### Phase 4: Testing
 
-18. **D** runs the code. Tests it.
-19. If tests fail, **D** sends failures to **C**. **C** fixes, **D** tests again.
-20. Loops until all tests pass.
+19. **D** runs the code. Tests it.
+20. If tests fail, **D** sends failures to **C**. **C** fixes, **D** tests again.
+21. Loops until all tests pass.
 
 ### Phase 5: Deploy
 
-21. Build complete. Project is in `~/Builds/<project-name>/`.
+22. Build complete. Project is in `~/Builds/<project-name>/`.
 
 ## Enforcement: Scripts, Not Prompts
 
@@ -143,7 +146,9 @@ claude -p "<prompt>" \
 4. Advances the pipeline phase on approval signals
 5. Tracks token usage, costs, and events
 6. Persists active-turn runtime state and recoverable session ids
-7. Writes everything to `pipeline-events.json` for the viewer
+7. Can pause cleanly after approved plan review when the supervisor requests it
+8. Can continue from an approved plan or manually resume a stalled A/B planning-review turn
+9. Writes everything to `pipeline-events.json` for the viewer
 
 The orchestrator cannot be confused, distracted, or convinced to skip steps.
 
@@ -155,6 +160,7 @@ A Next.js app that polls `pipeline-events.json` every 400ms and renders:
 - Live feed of all events
 - 5-panel grid (S + A/B/C/D) with per-agent event streams
 - Current-turn and stalled-turn visibility for recovery
+- Supervisor controls for `plan-only`, `stop after review`, `continue build`, and `resume stalled run`
 - Dashboard with phase progress, token usage, cost
 - Per-panel chat inputs for direct agent communication
 - START/STOP/Reset controls
@@ -162,6 +168,8 @@ A Next.js app that polls `pipeline-events.json` every 400ms and renders:
 API routes handle:
 - `POST /api/chat` — spawns a claude session for direct chat (Phase 0 or post-build)
 - `POST /api/start-pipeline` — creates project dir from staging, spawns orchestrator
+- `POST /api/pipeline-control` — arms or clears supervisor stop-after-review
+- `POST /api/resume-pipeline` — continues from an approved plan or resumes a stalled planning/review turn
 - `POST /api/stop-pipeline` — kills orchestrator + claude sessions
 - `POST /api/reset` — clears staging, resets stuck projects
 - `GET /api/state` — returns current pipeline state

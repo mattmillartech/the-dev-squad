@@ -53,7 +53,7 @@ The Dev Squad is moving toward a simple product idea:
 - `A`, `B`, `C`, and `D` are the specialists
 - the whole team follows the same doctrine: `build-plan-template.md`, `checklist.md`, and the approved `plan.md`
 
-Today, pipeline mode still starts with **A** in Phase 0. The long-term direction is for **S** to become the primary operator while the specialists do the actual planning, review, coding, and testing work. The current implementation already has the first recovery foundation for that direction: live turn tracking, stalled-turn visibility, and saved session ids for recovery.
+Today, pipeline mode still starts with **A** in Phase 0. The long-term direction is for **S** to become the primary operator while the specialists do the actual planning, review, coding, and testing work. The current implementation now has the first real supervisor controls for that direction: live turn tracking, stalled-turn visibility, saved session ids for recovery, `plan-only`, `stop after review`, and resume/continue actions in the dashboard.
 
 The implementation plan for that shift lives in [SUPERVISOR-BUILD-PLAN.md](SUPERVISOR-BUILD-PLAN.md).
 
@@ -108,7 +108,7 @@ A pixel art office where 5 agents sit at desks. You watch them work in real-time
 - **Current Turn** — Shows which agent turn is active, what it is doing, and whether it looks stalled
 - **5-Panel Grid** — S (supervisor) panel on the left, A/B/C/D on the right. Each panel shows that agent's activity with auto-scroll. Click any panel to expand.
 - **Per-Panel Chat** — Each panel has its own input. Talk directly to any agent.
-- **Controls** — START, STOP, Reset, View Plan
+- **Controls** — `Full Build` / `Plan Only`, `START`, `STOP AFTER REVIEW`, `CONTINUE BUILD`, `RESUME STALLED RUN`, `STOP`, `Reset`, `View Plan`
 - **Art style** — The office scene uses a mix of original pixel sprites and CSS-drawn props
 
 When idle, agents wander the office, visit the hookah lounge, and play ping pong.
@@ -147,11 +147,14 @@ The autonomous build pipeline. You describe what you want, and 5 agents build it
 
 1. **Reset** — Clear any previous session
 2. **Talk to the Planner** — Type your concept in Agent A's panel. A asks clarifying questions until the scope is clear.
-3. **Start the Pipeline** — Click **START**. The orchestrator runs A→B→C→D autonomously. A writes the plan, B reviews it, C codes it, D tests it.
-4. **Watch** — Each panel auto-scrolls as events come in. Click any panel to expand. The dashboard shows phase progress.
-5. **Stop** — Click **STOP** at any time to abort.
-6. **View Plan** — Once A writes the plan, click **View Plan** to read it.
-7. **Done** — Your project is in `~/Builds/<project-name>/`.
+3. **Choose a Goal** — Pick **Full Build** to run the whole team or **Plan Only** to stop cleanly after B approves the plan.
+4. **Start the Pipeline** — Click **START**. The orchestrator runs A→B→C→D according to the selected goal.
+5. **Optionally Pause After Review** — During planning or plan review, click **STOP AFTER REVIEW** if you want the run to pause after B approves the plan instead of continuing straight into coding.
+6. **Watch** — Each panel auto-scrolls as events come in. Click any panel to expand. The dashboard shows phase progress.
+7. **Continue or Recover** — If the run pauses after plan review, click **CONTINUE BUILD** to send the approved plan on to C. If A or B stalls during planning/review, click **RESUME STALLED RUN** to continue from the saved Claude session instead of resetting the run.
+8. **Stop** — Click **STOP** at any time to abort.
+9. **View Plan** — Once A writes the plan, click **View Plan** to read it.
+10. **Done** — Your project is in `~/Builds/<project-name>/`.
 
 After the build, chat with any agent for post-build work — fixing bugs, adding features, asking questions.
 
@@ -192,7 +195,7 @@ Once the build is complete, you can chat directly with any agent for post-build 
 
 ### The Supervisor (S Panel)
 
-The S panel on the left is the beginning of the "Claude with a dev team" model. Today, S is not yet the full control plane, but S is already your supervisor and recovery partner. If something breaks, stalls, loops, or looks suspicious, ask S what is happening. S can read the event log, the plan, the code, and help you decide whether to wait, stop, retry, or recover.
+The S panel on the left is the beginning of the "Claude with a dev team" model. Today, S is not yet the full control plane, but S is already your supervisor and recovery partner. In pipeline mode, S now gets a live team snapshot every time you chat with it: current phase, pipeline status, active turn, recent events, pending approvals, and recommended next actions. If something breaks, stalls, loops, or looks suspicious, ask S what is happening. S can read the event log, the plan, the code, and help you decide whether to wait, stop, pause after review, continue from an approved plan, or resume a stalled planner/reviewer turn.
 
 ### Controls Reference
 
@@ -200,7 +203,12 @@ The S panel on the left is the beginning of the "Claude with a dev team" model. 
 |---------|------|-------------|
 | **PIPELINE / MANUAL** | Both | Toggle between autonomous pipeline and manual orchestration |
 | **Model Picker** | Manual | Choose Claude model (Opus or Sonnet) |
-| **START** | Pipeline | Creates project directory, spawns orchestrator, begins autonomous build |
+| **Full Build / Plan Only** | Pipeline | Chooses whether the supervisor should run the whole team or stop after approved plan review |
+| **START** | Pipeline | Creates project directory, spawns orchestrator, and begins the selected supervisor goal |
+| **STOP AFTER REVIEW** | Pipeline | Arms a clean pause once B approves the plan |
+| **KEEP RUNNING AFTER REVIEW** | Pipeline | Clears the stop-after-review request and lets the run continue into coding |
+| **CONTINUE BUILD** | Pipeline | Resumes a paused plan-only / stopped-after-review run from the approved plan |
+| **RESUME STALLED RUN** | Pipeline | Re-launches the orchestrator and resumes a stalled A/B planning-review turn from the saved Claude session |
 | **STOP** | Pipeline | Kills orchestrator and all agent sessions immediately |
 | **Reset** | Both | Clears all state. In pipeline mode, also stops the orchestrator. |
 | **View Plan** | Pipeline | Opens `plan.md` in a modal (appears after A writes the plan) |

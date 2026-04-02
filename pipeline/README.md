@@ -10,10 +10,11 @@ The key idea is that this folder contains the team's shared operating system:
 - the master build plan template
 - the shared checklist
 - the hook guardrails that keep the team disciplined
+- the orchestrator logic behind `plan-only`, `stop after review`, and stalled-turn recovery
 
 ## Files
 
-- `orchestrator.ts` — Spawns agent sessions, routes signals, enforces pipeline flow
+- `orchestrator.ts` — Spawns agent sessions, routes signals, enforces pipeline flow, and handles supervisor pause/resume controls
 - `.claude/hooks/approval-gate.sh` — Per-agent permission enforcement
 - `.claude/settings.json` — Hook configuration
 - `role-a.md` through `role-s.md` — Agent role context files

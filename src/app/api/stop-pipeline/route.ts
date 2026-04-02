@@ -37,6 +37,7 @@ export async function POST() {
       if (existsSync(eventsFile)) {
         const state = JSON.parse(readFileSync(eventsFile, 'utf8'));
         state.activeAgent = '';
+        state.pipelineStatus = 'paused';
         if (state.agentStatus && typeof state.agentStatus === 'object') {
           for (const [agent, status] of Object.entries(state.agentStatus)) {
             if (status === 'active' || status === 'working') {

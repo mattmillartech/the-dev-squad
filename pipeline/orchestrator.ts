@@ -74,19 +74,22 @@ let concept = '';
 let projectDir = '';
 let existingASession = '';
 let securityMode = process.env.PIPELINE_SECURITY_MODE === 'strict' ? 'strict' : 'fast';
+let resumingExistingProject = false;
 
 const args = process.argv.slice(2);
 const projectDirIdx = args.indexOf('--project-dir');
 const aSessionIdx = args.indexOf('--a-session');
 
-if (projectDirIdx !== -1 && aSessionIdx !== -1) {
-  // Launched by viewer — Phase 0 already done
+if (projectDirIdx !== -1) {
+  // Launched by viewer or resumed from existing project
+  resumingExistingProject = true;
   projectDir = args[projectDirIdx + 1];
-  existingASession = args[aSessionIdx + 1];
+  if (aSessionIdx !== -1) existingASession = args[aSessionIdx + 1];
   // Read concept from existing state
   try {
     const existing = JSON.parse(readFileSync(join(projectDir, 'pipeline-events.json'), 'utf8'));
     concept = existing.concept || 'Build from viewer';
+    if (!existingASession) existingASession = existing.sessions?.A || '';
     if (existing.securityMode === 'strict') securityMode = 'strict';
   } catch {
     concept = 'Build from viewer';
@@ -166,6 +169,10 @@ interface PipelineState {
   projectDir: string;
   currentPhase: string;
   securityMode: 'fast' | 'strict';
+  runGoal: 'full-build' | 'plan-only';
+  stopAfterPhase: 'none' | 'plan-review';
+  pipelineStatus: 'idle' | 'running' | 'paused' | 'complete' | 'failed';
+  resumeAction?: 'none' | 'continue-approved-plan' | 'resume-stalled-turn';
   activeAgent: string;
   agentStatus: Record<string, string>;
   sessions: Record<string, string>;
@@ -178,7 +185,7 @@ interface PipelineState {
 const eventsFile = join(projectDir, 'pipeline-events.json');
 
 let state: PipelineState;
-if (existingASession && existsSync(eventsFile)) {
+if (resumingExistingProject && existsSync(eventsFile)) {
   // Launched from viewer — load existing state (has Phase 0 events + sessions)
   const existing = JSON.parse(readFileSync(eventsFile, 'utf8'));
   state = {
@@ -186,10 +193,14 @@ if (existingASession && existsSync(eventsFile)) {
     projectDir: existing.projectDir || projectDir,
     currentPhase: existing.currentPhase || 'concept',
     securityMode: existing.securityMode === 'strict' ? 'strict' : securityMode,
+    runGoal: existing.runGoal === 'plan-only' ? 'plan-only' : 'full-build',
+    stopAfterPhase: existing.stopAfterPhase === 'plan-review' ? 'plan-review' : 'none',
+    pipelineStatus: existing.pipelineStatus || (existing.buildComplete ? 'complete' : 'idle'),
+    resumeAction: existing.resumeAction === 'continue-approved-plan' || existing.resumeAction === 'resume-stalled-turn' ? existing.resumeAction : 'none',
     activeAgent: existing.activeAgent || '',
     agentStatus: existing.agentStatus || { A: 'idle', B: 'idle', C: 'idle', D: 'idle' },
     sessions: existing.sessions || {},
-    buildComplete: false,
+    buildComplete: !!existing.buildComplete,
     usage: existing.usage || { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalCostUsd: 0 },
     runtime: existing.runtime || { ...EMPTY_RUNTIME },
     events: existing.events || [],
@@ -200,6 +211,10 @@ if (existingASession && existsSync(eventsFile)) {
     projectDir,
     currentPhase: 'concept',
     securityMode,
+    runGoal: 'full-build',
+    stopAfterPhase: 'none',
+    pipelineStatus: 'idle',
+    resumeAction: 'none',
     activeAgent: '',
     agentStatus: { A: 'idle', B: 'idle', C: 'idle', D: 'idle' },
     sessions: {},
@@ -247,12 +262,21 @@ function setPhase(phase: string) {
   flush();
 }
 
+function setPipelineStatus(status: PipelineState['pipelineStatus']) {
+  state.pipelineStatus = status;
+  flush();
+}
+
 function saveSession(agent: string, sessionId: string) {
   state.sessions[agent] = sessionId;
   if (state.runtime.activeTurn?.agent === agent) {
     state.runtime.activeTurn.sessionId = sessionId;
   }
   flush();
+}
+
+function shouldStopAfterPlanReview() {
+  return state.stopAfterPhase === 'plan-review' || state.runGoal === 'plan-only';
 }
 
 function startActiveTurn(agent: AgentId, prompt: string, autoResumeCount: number, resume?: string) {
@@ -759,47 +783,22 @@ function isPositiveSignal(signal: Record<string, unknown>): boolean {
   return s === 'approved' || s === 'passed';
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  PIPELINE EXECUTION
-// ════════════════════════════════════════════════════════════════════
+function buildPhase0Context() {
+  if (!existingASession) return '';
 
-async function run() {
-  console.log('\n\x1b[1m╔══════════════════════════════════════════╗');
-  console.log('║     PIPELINE BUILD ORCHESTRATOR (LIVE)     ║');
-  console.log('╚══════════════════════════════════════════╝\x1b[0m');
-  console.log(`\n  Concept:  ${concept}`);
-  console.log(`  Project:  ${projectDir}`);
-  console.log(`  Viewer:   http://localhost:3456\n`);
+  const phase0Events = state.events.filter(
+    (event) => event.agent === 'A' || (event.type === 'user_msg' && event.phase === 'concept')
+  );
+  if (phase0Events.length === 0) return '';
 
-  let aSession = existingASession;
+  return 'Here is the Phase 0 conversation with the user about what to build:\n\n' +
+    phase0Events.map((event) => event.text).join('\n') + '\n\n';
+}
 
-  if (existingASession) {
-    // ── Launched from viewer — Phase 0 already done ───────────────
-    emit('system', 'concept', 'status', `Build concept: ${concept}`);
-    emit('system', 'concept', 'status', 'Phase 0 completed in viewer. Starting pipeline...');
-  } else {
-    // ── Phase 0 (standalone mode) ─────────────────────────────────
-    setPhase('concept');
-    emit('system', 'concept', 'status', `Build concept: ${concept}`);
-  }
+function buildPlanPrompt() {
+  const phase0Context = buildPhase0Context();
 
-  // ── Phase 1: Planning ───────────────────────────────────────────
-
-  setPhase('planning');
-  setAgent('A', 'active');
-  emit('A', 'planning', 'status', 'Starting research and plan writing...');
-
-  // Build Phase 0 conversation context if resuming from viewer
-  let phase0Context = '';
-  if (existingASession) {
-    const phase0Events = state.events.filter(e => e.agent === 'A' || (e.type === 'user_msg' && e.phase === 'concept'));
-    if (phase0Events.length > 0) {
-      phase0Context = 'Here is the Phase 0 conversation with the user about what to build:\n\n' +
-        phase0Events.map(e => e.text).join('\n') + '\n\n';
-    }
-  }
-
-  const planPrompt = [
+  return [
     existingASession
       ? phase0Context + 'Based on the conversation above, build the plan now.'
       : `Build concept from the user: ${concept}`,
@@ -823,35 +822,82 @@ async function run() {
     '- Do NOT send the plan to anyone. The orchestrator handles that.',
     '- Do not take shortcuts. Do not guess. Verify everything from source.',
   ].join('\n');
+}
 
-  const aResult = await claude('A', planPrompt, {
+async function runPlanningPhase(aSession: string, options?: { resumeStalled?: boolean }): Promise<string> {
+  setPhase('planning');
+  setPipelineStatus('running');
+  setAgent('A', 'active');
+
+  if (options?.resumeStalled) {
+    emit('system', 'planning', 'status', 'Supervisor resumed A from the saved planning session');
+  } else {
+    emit('A', 'planning', 'status', 'Starting research and plan writing...');
+  }
+
+  const prompt = options?.resumeStalled ? buildResumePrompt('A', 'planning') : buildPlanPrompt();
+  const aResult = await claude('A', prompt, {
     role: ROLE_A,
+    resume: options?.resumeStalled ? (aSession || state.runtime.activeTurn?.sessionId || state.sessions.A) : undefined,
   });
+
   aSession = aResult.sessionId;
   saveSession('A', aSession);
 
   if (!existsSync(join(projectDir, 'plan.md'))) {
     emit('A', 'planning', 'failure', 'Did not write plan.md');
-    process.exit(1);
+    throw new Error('Agent A did not write plan.md');
   }
 
   emit('A', 'planning', 'status', 'Plan written to plan.md');
+  return aSession;
+}
 
-  // ── Phase 1b: Plan Review ─────────────────────────────────────
+async function runPlanReviewPhase(
+  aSession: string,
+  options?: {
+    resumeStalledAgent?: 'A' | 'B';
+    bSession?: string;
+    emitInitialSend?: boolean;
+  }
+): Promise<{ aSession: string; bSession?: string; reviewRound: number; paused: boolean }> {
+  let bSession = options?.bSession || state.sessions.B || undefined;
+  let planApproved = false;
+  let reviewRound = state.events.filter(
+    (event) => event.agent === 'B' && event.phase === 'plan-review' && event.type === 'status' && /^Review round \d+/.test(event.text)
+  ).length;
 
   setPhase('plan-review');
+  setPipelineStatus('running');
   setAgent('A', 'idle');
   setAgent('B', 'active');
-  emit('A', 'plan-review', 'send', 'Sent plan to B for review');
 
-  let bSession: string | undefined;
-  let planApproved = false;
-  let reviewRound = 0;
+  if (options?.emitInitialSend !== false) {
+    emit('A', 'plan-review', 'send', 'Sent plan to B for review');
+  }
 
-  while (!planApproved) {
-    reviewRound++;
+  if (options?.resumeStalledAgent === 'A') {
+    setAgent('B', 'idle');
+    setAgent('A', 'active');
+    emit('system', 'plan-review', 'status', 'Supervisor resumed A during plan review');
 
-    const bPrompt = bSession
+    const aResume = await claude('A', buildResumePrompt('A', 'plan-review'), {
+      role: ROLE_A,
+      resume: aSession || state.runtime.activeTurn?.sessionId || state.sessions.A,
+    });
+    aSession = aResume.sessionId;
+    saveSession('A', aSession);
+
+    emit('A', 'plan-review', 'answer', 'Answered questions and updated plan');
+    emit('A', 'plan-review', 'send', 'Sent updated plan to B');
+    setAgent('A', 'idle');
+    setAgent('B', 'active');
+  }
+
+  let nextBPrompt =
+    options?.resumeStalledAgent === 'B'
+      ? buildResumePrompt('B', 'plan-review')
+      : options?.resumeStalledAgent === 'A'
       ? [
           'A has answered your questions and updated the plan.',
           `Review the updated plan at ${join(projectDir, 'plan.md')} again.`,
@@ -870,12 +916,17 @@ async function run() {
           '',
           'Respond with ONLY a JSON object: {"status": "approved"} or {"status": "questions", "questions": ["..."]}',
         ].join('\n');
+  let nextBResume = options?.resumeStalledAgent === 'B'
+    ? (state.runtime.activeTurn?.sessionId || bSession)
+    : bSession;
 
+  while (!planApproved) {
+    reviewRound += 1;
     emit('B', 'plan-review', 'status', `Review round ${reviewRound}...`);
 
-    const bResult = await claude('B', bPrompt, {
+    const bResult = await claude('B', nextBPrompt, {
       role: ROLE_B,
-      resume: bSession,
+      resume: nextBResume,
       jsonSchema: REVIEW_SCHEMA,
     });
     bSession = bResult.sessionId;
@@ -887,41 +938,70 @@ async function run() {
       planApproved = true;
       emit('B', 'plan-review', 'approval', 'PLAN APPROVED');
       setAgent('B', 'done');
-    } else {
-      const questions = (signal.questions as string[]) || [];
-
-      questions.forEach((q, i) => {
-        emit('B', 'plan-review', 'question', `Q${i + 1}: ${q}`);
-      });
-
-      emit('B', 'plan-review', 'send', `Sent ${questions.length} question(s) to A`);
-
-      setAgent('A', 'active');
-      emit('A', 'plan-review', 'receive', `Received ${questions.length} question(s) from B`);
-
-      const aFollowup = await claude('A', [
-        'Agent B (Plan Reviewer) has questions about your plan:',
-        '',
-        ...questions.map((q, i) => `${i + 1}. ${q}`),
-        '',
-        'Answer each question with verified information.',
-        `Update ${join(projectDir, 'plan.md')} with any corrections or additions.`,
-        'Do not guess. Verify from source.',
-      ].join('\n'), { role: ROLE_A, resume: aSession });
-      aSession = aFollowup.sessionId;
-      saveSession('A', aSession);
-
-      emit('A', 'plan-review', 'answer', 'Answered questions and updated plan');
-      emit('A', 'plan-review', 'send', 'Sent updated plan to B');
-      setAgent('A', 'idle');
+      break;
     }
+
+    const questions = (signal.questions as string[]) || [];
+    questions.forEach((question, index) => {
+      emit('B', 'plan-review', 'question', `Q${index + 1}: ${question}`);
+    });
+
+    emit('B', 'plan-review', 'send', `Sent ${questions.length} question(s) to A`);
+
+    setAgent('A', 'active');
+    emit('A', 'plan-review', 'receive', `Received ${questions.length} question(s) from B`);
+
+    const aFollowup = await claude('A', [
+      'Agent B (Plan Reviewer) has questions about your plan:',
+      '',
+      ...questions.map((question, index) => `${index + 1}. ${question}`),
+      '',
+      'Answer each question with verified information.',
+      `Update ${join(projectDir, 'plan.md')} with any corrections or additions.`,
+      'Do not guess. Verify from source.',
+    ].join('\n'), { role: ROLE_A, resume: aSession });
+    aSession = aFollowup.sessionId;
+    saveSession('A', aSession);
+
+    emit('A', 'plan-review', 'answer', 'Answered questions and updated plan');
+    emit('A', 'plan-review', 'send', 'Sent updated plan to B');
+    setAgent('A', 'idle');
+    setAgent('B', 'active');
+
+    nextBPrompt = [
+      'A has answered your questions and updated the plan.',
+      `Review the updated plan at ${join(projectDir, 'plan.md')} again.`,
+      'If you still have concerns, respond with status "questions" and list them.',
+      'If the plan is now bulletproof, respond with status "approved".',
+      '',
+      'Respond with ONLY a JSON object: {"status": "approved"} or {"status": "questions", "questions": ["..."]}',
+    ].join('\n');
+    nextBResume = bSession;
   }
 
   emit('A', 'plan-review', 'status', 'Plan locked — final, unmodifiable copy');
 
-  // ── Phase 2: Coding ───────────────────────────────────────────
+  if (shouldStopAfterPlanReview()) {
+    state.activeAgent = '';
+    setPipelineStatus('paused');
+    emit(
+      'system',
+      'plan-review',
+      'status',
+      state.runGoal === 'plan-only'
+        ? 'Plan-only run complete. Supervisor stopped after approved plan review.'
+        : 'Supervisor stopped the pipeline after approved plan review.'
+    );
+    flush();
+    return { aSession, bSession, reviewRound, paused: true };
+  }
 
+  return { aSession, bSession, reviewRound, paused: false };
+}
+
+async function runBuildFromCoding(aSession: string): Promise<{ aSession: string; codeReviewRound: number; testRound: number }> {
   setPhase('coding');
+  setPipelineStatus('running');
   setAgent('C', 'active');
   emit('A', 'coding', 'send', 'Sent approved plan to C');
   emit('C', 'coding', 'receive', 'Received approved plan from A');
@@ -941,8 +1021,6 @@ async function run() {
 
   emit('C', 'coding', 'status', 'Finished coding');
 
-  // ── Phase 3: Code Review ──────────────────────────────────────
-
   setPhase('code-review');
   setAgent('C', 'idle');
   setAgent('D', 'active');
@@ -954,7 +1032,7 @@ async function run() {
   let codeReviewRound = 0;
 
   while (!codeApproved) {
-    codeReviewRound++;
+    codeReviewRound += 1;
 
     const dPrompt = dSession
       ? [
@@ -988,8 +1066,8 @@ async function run() {
     } else {
       const issues = (signal.issues as string[]) || [];
 
-      issues.forEach((issue, i) => {
-        emit('D', 'code-review', 'issue', `Issue ${i + 1}: ${issue}`);
+      issues.forEach((issue, index) => {
+        emit('D', 'code-review', 'issue', `Issue ${index + 1}: ${issue}`);
       });
 
       emit('D', 'code-review', 'send', `Sent ${issues.length} issue(s) to C`);
@@ -999,7 +1077,7 @@ async function run() {
       const cReviewFollowup = await claude('C', [
         'Agent D (Code Reviewer) found issues with your code:',
         '',
-        ...issues.map((issue, i) => `${i + 1}. ${issue}`),
+        ...issues.map((issue, index) => `${index + 1}. ${issue}`),
         '',
         'Fix each issue. Do not modify plan.md.',
       ].join('\n'), { role: ROLE_C, resume: cSession });
@@ -1012,8 +1090,6 @@ async function run() {
     }
   }
 
-  // ── Phase 4: Testing ──────────────────────────────────────────
-
   setPhase('testing');
   emit('D', 'testing', 'status', 'Moving to testing...');
 
@@ -1021,7 +1097,7 @@ async function run() {
   let testRound = 0;
 
   while (!testsPassed) {
-    testRound++;
+    testRound += 1;
 
     const testPrompt = testRound === 1
       ? [
@@ -1039,15 +1115,15 @@ async function run() {
 
     emit('D', 'testing', 'status', `Test round ${testRound}...`);
 
-      const testResult = await claude('D', testPrompt, {
-        role: ROLE_D,
-        resume: dSession!,
-        jsonSchema: TEST_SCHEMA,
-      });
-      dSession = testResult.sessionId;
-      saveSession('D', dSession);
+    const testResult = await claude('D', testPrompt, {
+      role: ROLE_D,
+      resume: dSession!,
+      jsonSchema: TEST_SCHEMA,
+    });
+    dSession = testResult.sessionId;
+    saveSession('D', dSession);
 
-      const signal = testResult.structured || parseSignal(testResult.result);
+    const signal = testResult.structured || parseSignal(testResult.result);
 
     if (isPositiveSignal(signal)) {
       testsPassed = true;
@@ -1056,8 +1132,8 @@ async function run() {
     } else {
       const failures = (signal.failures as string[]) || [];
 
-      failures.forEach((f, i) => {
-        emit('D', 'testing', 'failure', `Failure ${i + 1}: ${f}`);
+      failures.forEach((failure, index) => {
+        emit('D', 'testing', 'failure', `Failure ${index + 1}: ${failure}`);
       });
 
       emit('D', 'testing', 'send', `Sent ${failures.length} failure(s) to C`);
@@ -1067,7 +1143,7 @@ async function run() {
       const cTestFollowup = await claude('C', [
         'Agent D (Tester) found test failures:',
         '',
-        ...failures.map((f, i) => `${i + 1}. ${f}`),
+        ...failures.map((failure, index) => `${index + 1}. ${failure}`),
         '',
         'Fix each failure. Do not modify plan.md.',
       ].join('\n'), { role: ROLE_C, resume: cSession });
@@ -1079,8 +1155,6 @@ async function run() {
       setAgent('C', 'done');
     }
   }
-
-  // ── Phase 5: Deploy ───────────────────────────────────────────
 
   setPhase('deploy');
   setAgent('A', 'active');
@@ -1098,25 +1172,121 @@ async function run() {
 
   setAgent('A', 'done');
   setPhase('complete');
+  setPipelineStatus('complete');
   state.buildComplete = true;
   emit('A', 'deploy', 'approval', 'BUILD COMPLETE');
 
-  // Git commit the final build
   try {
     execFileSync('git', ['add', '.'], { cwd: projectDir });
     execFileSync('git', ['commit', '-m', `Build complete: ${concept.slice(0, 50)}`], { cwd: projectDir });
     emit('system', 'complete', 'status', 'Code committed to git');
   } catch {}
 
-  // Try to open the result — look for index.html or any .html file
   try {
     const files = readdirSync(projectDir);
-    const htmlFile = files.find(f => f === 'index.html') || files.find(f => f.endsWith('.html'));
+    const htmlFile = files.find((file) => file === 'index.html') || files.find((file) => file.endsWith('.html'));
     if (htmlFile) {
       execFileSync('open', [join(projectDir, htmlFile)]);
       emit('system', 'complete', 'status', `Opened ${htmlFile}`);
     }
   } catch {}
+
+  return { aSession, codeReviewRound, testRound };
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PIPELINE EXECUTION
+// ════════════════════════════════════════════════════════════════════
+
+async function run() {
+  console.log('\n\x1b[1m╔══════════════════════════════════════════╗');
+  console.log('║     PIPELINE BUILD ORCHESTRATOR (LIVE)     ║');
+  console.log('╚══════════════════════════════════════════╝\x1b[0m');
+  console.log(`\n  Concept:  ${concept}`);
+  console.log(`  Project:  ${projectDir}`);
+  console.log(`  Viewer:   http://localhost:3456\n`);
+
+  let aSession = existingASession;
+  let reviewRound = 0;
+  let codeReviewRound = 0;
+  let testRound = 0;
+
+  if (existingASession && !resumingExistingProject) {
+    emit('system', 'concept', 'status', `Build concept: ${concept}`);
+    emit('system', 'concept', 'status', 'Phase 0 completed in viewer. Starting pipeline...');
+  } else if (!resumingExistingProject) {
+    setPhase('concept');
+    emit('system', 'concept', 'status', `Build concept: ${concept}`);
+  } else {
+    emit('system', state.currentPhase || 'concept', 'status', 'Resuming existing pipeline state');
+  }
+
+  const initialPipelineStatus = state.pipelineStatus;
+  const initialResumeAction = state.resumeAction || 'none';
+  state.resumeAction = 'none';
+  flush();
+  setPipelineStatus('running');
+
+  const stalledTurn = state.runtime.activeTurn?.status === 'stalled' ? state.runtime.activeTurn : null;
+
+  if (initialResumeAction === 'continue-approved-plan' && state.currentPhase === 'plan-review') {
+    emit('system', 'plan-review', 'status', 'Continuing from the approved plan');
+  } else if (initialPipelineStatus === 'paused' && state.currentPhase === 'plan-review') {
+    emit('system', 'plan-review', 'status', 'Continuing from the approved plan');
+  } else if (initialResumeAction === 'resume-stalled-turn' && stalledTurn?.agent === 'A' && stalledTurn.phase === 'planning') {
+    aSession = await runPlanningPhase(aSession, { resumeStalled: true });
+    const review = await runPlanReviewPhase(aSession);
+    reviewRound = review.reviewRound;
+    if (review.paused) return;
+    aSession = review.aSession;
+  } else if (initialResumeAction === 'resume-stalled-turn' && stalledTurn?.phase === 'plan-review' && (stalledTurn.agent === 'A' || stalledTurn.agent === 'B')) {
+    const review = await runPlanReviewPhase(aSession, {
+      resumeStalledAgent: stalledTurn.agent,
+      bSession: state.sessions.B,
+      emitInitialSend: false,
+    });
+    reviewRound = review.reviewRound;
+    if (review.paused) return;
+    aSession = review.aSession;
+  } else if (stalledTurn?.agent === 'A' && stalledTurn.phase === 'planning') {
+    aSession = await runPlanningPhase(aSession, { resumeStalled: true });
+    const review = await runPlanReviewPhase(aSession);
+    reviewRound = review.reviewRound;
+    if (review.paused) return;
+    aSession = review.aSession;
+  } else if (stalledTurn?.phase === 'plan-review' && (stalledTurn.agent === 'A' || stalledTurn.agent === 'B')) {
+    const review = await runPlanReviewPhase(aSession, {
+      resumeStalledAgent: stalledTurn.agent,
+      bSession: state.sessions.B,
+      emitInitialSend: false,
+    });
+    reviewRound = review.reviewRound;
+    if (review.paused) return;
+    aSession = review.aSession;
+  } else if (state.currentPhase === 'plan-review' && existsSync(join(projectDir, 'plan.md'))) {
+    const review = await runPlanReviewPhase(aSession, {
+      bSession: state.sessions.B,
+      emitInitialSend: false,
+    });
+    reviewRound = review.reviewRound;
+    if (review.paused) return;
+    aSession = review.aSession;
+  } else if (state.currentPhase === 'concept' || state.currentPhase === 'planning') {
+    aSession = await runPlanningPhase(aSession, { resumeStalled: false });
+    const review = await runPlanReviewPhase(aSession);
+    reviewRound = review.reviewRound;
+    if (review.paused) return;
+    aSession = review.aSession;
+  }
+
+  if (!existsSync(join(projectDir, 'plan.md'))) {
+    throw new Error('plan.md is missing; cannot continue the build');
+  }
+
+  const build = await runBuildFromCoding(aSession);
+  aSession = build.aSession;
+  codeReviewRound = build.codeReviewRound;
+  testRound = build.testRound;
 
   console.log('\n\x1b[1m╔══════════════════════════════════════════╗');
   console.log('║            BUILD COMPLETE                 ║');
@@ -1130,6 +1300,9 @@ async function run() {
 }
 
 run().catch((err) => {
+  try {
+    setPipelineStatus('failed');
+  } catch {}
   console.error('\n[FATAL]', err.message);
   process.exit(1);
 });

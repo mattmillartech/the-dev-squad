@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/shared/Badge';
 import { LunarOfficeScene } from '@/components/mission/LunarOfficeScene';
-import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type SecurityMode } from '@/lib/use-pipeline';
+import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
+import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
 
 const AGENT_NAMES: Record<AgentId, string> = {
   A: 'Planner', B: 'Reviewer', C: 'Coder', D: 'Tester', S: 'Supervisor',
@@ -44,9 +45,10 @@ export default function PipelinePage() {
   const [mode, setMode] = useState<AppMode>('pipeline');
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
   const [selectedSecurityMode, setSelectedSecurityMode] = useState<SecurityMode>('fast');
+  const [selectedRunGoal, setSelectedRunGoal] = useState<RunGoal>('full-build');
 
   const {
-    state, sendChat, startPipeline, stopPipeline, approveBash, getPlan, resetState, agentEvents, agentSpeech,
+    state, sendChat, startPipeline, resumePipeline, stopPipeline, setStopAfterReview, approveBash, getPlan, resetState, agentEvents, agentSpeech,
   } = usePipelineState({ pollInterval: 400, mode, model: selectedModel });
 
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('S');
@@ -69,7 +71,9 @@ export default function PipelinePage() {
 
   const isPipeline = mode === 'pipeline';
   const hasLivePipelineActivity = Boolean(state.activeAgent || state.runtime?.activeTurn || pendingApproval);
-  const pipelineRunning = isPipeline && !state.buildComplete && (pipelineStarted || hasLivePipelineActivity);
+  const pipelineRunning = isPipeline && (state.pipelineStatus === 'running' || (!state.buildComplete && (pipelineStarted || hasLivePipelineActivity)));
+  const pipelinePaused = isPipeline && state.pipelineStatus === 'paused';
+  const pipelineFailed = isPipeline && state.pipelineStatus === 'failed';
 
   // Auto-scroll: all panels, expanded modal, and live feed
   useEffect(() => {
@@ -151,10 +155,20 @@ export default function PipelinePage() {
   async function handleStartPipeline() {
     completionNotifiedRef.current = false;
     setPipelineStarted(true);
-    const res = await startPipeline(selectedSecurityMode);
+    const res = await startPipeline(selectedSecurityMode, selectedRunGoal);
     if (!res?.success) {
       setPipelineStarted(false);
       console.error('Pipeline failed to start:', res?.error || 'Unknown error');
+    }
+  }
+
+  async function handleResumePipeline() {
+    completionNotifiedRef.current = false;
+    setPipelineStarted(true);
+    const res = await resumePipeline();
+    if (!res?.success) {
+      setPipelineStarted(false);
+      console.error('Pipeline failed to resume:', res?.error || 'Unknown error');
     }
   }
 
@@ -213,6 +227,7 @@ export default function PipelinePage() {
   const progress = PHASE_PROGRESS[phase] || 0;
   const securityModeLocked = isPipeline && (pipelineStarted || pipelineRunning || !!state.projectDir);
   const activeSecurityMode = state.projectDir ? (state.securityMode || 'fast') : selectedSecurityMode;
+  const activeRunGoal = state.projectDir ? (state.runGoal || 'full-build') : selectedRunGoal;
 
   // Derived stats
   const firstEventTime = state.events.length > 0 ? new Date(state.events[0].time).getTime() : 0;
@@ -244,6 +259,14 @@ export default function PipelinePage() {
   const activeTurnIdleSeconds = activeTurn
     ? Math.max(0, Math.floor((nowMs - new Date(activeTurn.lastEventAt).getTime()) / 1000))
     : 0;
+  const stopAfterReviewArmed = state.stopAfterPhase === 'plan-review' || activeRunGoal === 'plan-only';
+  const canResumeStalledTurn = Boolean(
+    activeTurn &&
+    activeTurn.status === 'stalled' &&
+    activeTurn.sessionId &&
+    canAutoResumeTurn(activeTurn.agent, activeTurn.phase)
+  );
+  const canContinueApprovedPlan = pipelinePaused && phase === 'plan-review' && !!state.events.some((event) => event.text.includes('PLAN APPROVED'));
 
   return (
     <div className="p-4 space-y-4">
@@ -360,6 +383,32 @@ export default function PipelinePage() {
                 </div>
               </div>
             )}
+            {isPipeline && (
+              <div className="mt-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">Supervisor Goal</div>
+                <div className="flex items-center gap-2">
+                  <div className="flex rounded-lg border border-white/10 bg-white/5">
+                    <button
+                      onClick={() => setSelectedRunGoal('full-build')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${selectedRunGoal === 'full-build' ? 'bg-blue-600 text-white' : 'text-[#555] hover:text-[#888]'}`}
+                      style={{ borderRadius: '7px 0 0 7px' }}
+                    >Full Build</button>
+                    <button
+                      onClick={() => setSelectedRunGoal('plan-only')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${selectedRunGoal === 'plan-only' ? 'bg-violet-600 text-white' : 'text-[#555] hover:text-[#888]'}`}
+                      style={{ borderRadius: '0 7px 7px 0' }}
+                    >Plan Only</button>
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    {selectedRunGoal === 'plan-only'
+                      ? 'Stop cleanly after B approves the plan'
+                      : 'Run the full team from planning through testing'}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Pipeline-only: Phase + Progress */}
@@ -378,6 +427,18 @@ export default function PipelinePage() {
                 <Badge variant={activeSecurityMode === 'strict' ? 'warning' : 'success'}>
                   {activeSecurityMode === 'strict' ? 'STRICT' : 'FAST'}
                 </Badge>
+                <Badge variant={activeRunGoal === 'plan-only' ? 'purple' : 'neutral'}>
+                  {activeRunGoal === 'plan-only' ? 'PLAN ONLY' : 'FULL BUILD'}
+                </Badge>
+                {state.stopAfterPhase === 'plan-review' && activeRunGoal === 'full-build' && (
+                  <Badge variant="warning">STOP AFTER REVIEW</Badge>
+                )}
+                {pipelinePaused && (
+                  <Badge variant="warning">PAUSED</Badge>
+                )}
+                {pipelineFailed && (
+                  <Badge variant="danger">FAILED</Badge>
+                )}
                 {state.buildComplete && <Badge variant="success">COMPLETE</Badge>}
               </div>
               <div>
@@ -495,9 +556,27 @@ export default function PipelinePage() {
 
           {/* Controls */}
           <div className="flex gap-2">
-            {isPipeline && !pipelineRunning && (!state.projectDir || state.currentPhase === 'concept' || state.buildComplete) && (
+            {isPipeline && !pipelineRunning && !pipelinePaused && (!state.projectDir || state.currentPhase === 'concept' || state.buildComplete) && (
               <button onClick={handleStartPipeline} className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold text-black transition hover:bg-emerald-400">
-                START
+                {selectedRunGoal === 'plan-only' ? 'START PLAN ONLY' : 'START FULL BUILD'}
+              </button>
+            )}
+            {isPipeline && pipelineRunning && (phase === 'planning' || phase === 'plan-review') && activeRunGoal === 'full-build' && (
+              <button
+                onClick={() => { void setStopAfterReview(!stopAfterReviewArmed); }}
+                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-violet-500"
+              >
+                {stopAfterReviewArmed ? 'KEEP RUNNING AFTER REVIEW' : 'STOP AFTER REVIEW'}
+              </button>
+            )}
+            {isPipeline && canContinueApprovedPlan && (
+              <button onClick={handleResumePipeline} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-500">
+                CONTINUE BUILD
+              </button>
+            )}
+            {isPipeline && canResumeStalledTurn && (
+              <button onClick={handleResumePipeline} className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-black transition hover:bg-amber-400">
+                RESUME STALLED RUN
               </button>
             )}
             <button onClick={() => { setPipelineStarted(false); completionNotifiedRef.current = false; stopPipeline(); setSendingAgents(new Set()); }} className="rounded-lg bg-red-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-400">
@@ -525,8 +604,8 @@ export default function PipelinePage() {
         }}
       >
         {/* S — Supervisor, spans both rows */}
-        <div className="flex cursor-pointer flex-col overflow-hidden bg-[#0c0c18]" style={{ gridRow: '1 / -1' }} onClick={() => setSelectedAgent('S')}>
-          <div className="flex items-center gap-3 border-b-2 border-emerald-600 px-3.5 py-2.5">
+          <div className="flex cursor-pointer flex-col overflow-hidden bg-[#0c0c18]" style={{ gridRow: '1 / -1' }} onClick={() => setSelectedAgent('S')}>
+            <div className="flex items-center gap-3 border-b-2 border-emerald-600 px-3.5 py-2.5">
             <div className={`flex h-9 w-9 items-center justify-center rounded-[10px] border-2 text-sm font-bold transition-all ${
               (state.agentStatus.S === 'active' || state.agentStatus.S === 'working')
                 ? 'border-emerald-500 text-emerald-400 shadow-[0_0_16px_rgba(34,197,94,0.25)]'
@@ -534,7 +613,7 @@ export default function PipelinePage() {
             }`} style={{ background: '#0e0e16' }}>S</div>
             <div>
               <div className="text-[13px] font-semibold text-[#999]">Supervisor</div>
-              <div className="text-[10px] text-[#444]">{isPipeline ? 'Chat here to direct the team' : 'Oversight & diagnostics'}</div>
+              <div className="text-[10px] text-[#444]">{isPipeline ? 'Recommended front door. Direct specialist chat still works.' : 'Oversight & diagnostics'}</div>
             </div>
             {isPipeline && state.events.some(e => e.text?.includes('plan.md')) && (
               <button onClick={handleViewPlan} className="ml-auto rounded border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] text-white hover:bg-white/10">
@@ -547,7 +626,7 @@ export default function PipelinePage() {
             className="flex-1 space-y-px overflow-y-auto px-2.5 py-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-sm [&::-webkit-scrollbar-thumb]:bg-[#252530] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-[3px]"
           >
             {agentEvents('S').length === 0 && (
-              <p className="pt-16 text-center text-xs tracking-wider text-[#252530]">{isPipeline ? 'Chat with S to diagnose pipeline issues' : 'Chat with the Supervisor'}</p>
+              <p className="pt-16 text-center text-xs tracking-wider text-[#252530]">{isPipeline ? 'Ask S to manage the run, or message any specialist directly.' : 'Chat with the Supervisor'}</p>
             )}
             {agentEvents('S').map((e, i) => (
               <div key={i} className={`rounded px-2 py-1 text-[11px] leading-relaxed ${
@@ -568,7 +647,7 @@ export default function PipelinePage() {
           </div>
           <div className="flex-shrink-0 border-t border-[#1a1a2a] px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
             <div className="mb-1.5 text-[10px] text-[#444]">
-              To: <span className="font-semibold text-emerald-400">S (Supervisor)</span>
+              Recommended: <span className="font-semibold text-emerald-400">S (Supervisor)</span>
             </div>
             <div className="flex gap-2">
               <input
@@ -576,7 +655,7 @@ export default function PipelinePage() {
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Message Supervisor..."
+                placeholder="Ask S, or chat with any specialist directly..."
                 disabled={sendingAgents.has('S')}
                 className="flex-1 rounded-lg border border-[#252530] bg-[#14141e] px-3 py-2 text-sm text-white placeholder-[#444] focus:border-emerald-600 focus:outline-none disabled:opacity-30"
               />
@@ -594,7 +673,12 @@ export default function PipelinePage() {
           const isSelected = selectedAgent === id;
           const isSending = sendingAgents.has(id);
           const AGENT_ROLES: Record<string, string> = isPipeline
-            ? { A: 'Chat with A to discuss your build concept', B: 'Pokes holes in the plan', C: 'Follows the plan, writes the code', D: 'Reviews code, runs tests' }
+            ? {
+                A: 'Direct planning chat when you want to hash out the build',
+                B: 'Direct review chat for plan gaps and tradeoffs',
+                C: 'Direct coding/debugging chat when you want deep context',
+                D: 'Direct testing/review chat for failures and fixes',
+              }
             : { A: MANUAL_ROLES.A, B: MANUAL_ROLES.B, C: MANUAL_ROLES.C, D: MANUAL_ROLES.D };
           const hasTextEvents = events.some(e => e.type === 'text');
           return (

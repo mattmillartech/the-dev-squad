@@ -7,6 +7,10 @@ export type AgentId = 'A' | 'B' | 'C' | 'D' | 'S';
 export type Phase = 'concept' | 'planning' | 'plan-review' | 'coding' | 'code-review' | 'testing' | 'deploy' | 'complete';
 export type AppMode = 'pipeline' | 'manual';
 export type SecurityMode = 'fast' | 'strict';
+export type RunGoal = 'full-build' | 'plan-only';
+export type StopAfterPhase = 'none' | 'plan-review';
+export type PipelineStatus = 'idle' | 'running' | 'paused' | 'complete' | 'failed';
+export type ResumeAction = 'none' | 'continue-approved-plan' | 'resume-stalled-turn';
 
 export interface PipelineEvent {
   time: string;
@@ -30,6 +34,10 @@ export interface PipelineState {
   projectDir: string;
   currentPhase: Phase;
   securityMode: SecurityMode;
+  runGoal: RunGoal;
+  stopAfterPhase: StopAfterPhase;
+  pipelineStatus: PipelineStatus;
+  resumeAction?: ResumeAction;
   activeAgent: string;
   agentStatus: Record<AgentId, string>;
   sessions: Record<string, string>;
@@ -58,6 +66,10 @@ const EMPTY_STATE: PipelineState = {
   projectDir: '',
   currentPhase: 'concept',
   securityMode: 'fast',
+  runGoal: 'full-build',
+  stopAfterPhase: 'none',
+  pipelineStatus: 'idle',
+  resumeAction: 'none',
   activeAgent: '',
   agentStatus: { A: 'idle', B: 'idle', C: 'idle', D: 'idle', S: 'idle' },
   sessions: {},
@@ -108,11 +120,30 @@ export function usePipelineState({ pollInterval = 400, mode, model }: UsePipelin
     return res.json();
   }, [mode, model]);
 
-  const startPipeline = useCallback(async (securityMode: SecurityMode) => {
+  const startPipeline = useCallback(async (securityMode: SecurityMode, runGoal: RunGoal) => {
     const res = await fetch('/api/start-pipeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ securityMode }),
+      body: JSON.stringify({ securityMode, runGoal }),
+    });
+    return res.json();
+  }, []);
+
+  const resumePipeline = useCallback(async () => {
+    const res = await fetch('/api/resume-pipeline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return res.json();
+  }, []);
+
+  const setStopAfterReview = useCallback(async (enabled: boolean) => {
+    const res = await fetch('/api/pipeline-control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: enabled ? 'stop-after-review' : 'clear-stop-after-review',
+      }),
     });
     return res.json();
   }, []);
@@ -169,7 +200,9 @@ export function usePipelineState({ pollInterval = 400, mode, model }: UsePipelin
     error,
     sendChat,
     startPipeline,
+    resumePipeline,
     stopPipeline,
+    setStopAfterReview,
     approveBash,
     getPlan,
     resetState,
