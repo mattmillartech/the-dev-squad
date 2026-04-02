@@ -17,9 +17,16 @@
 
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, copyFileSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, resolve, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
+import {
+  clearPendingApproval,
+  waitForPendingApproval,
+  writePendingApproval,
+  type PendingApproval,
+} from '../src/lib/pipeline-approval.ts';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -245,7 +252,45 @@ type AgentId = 'A' | 'B' | 'C' | 'D';
 
 // ── Streaming Claude Runner ─────────────────────────────────────────
 
-function claude(
+function parseStructuredOutputValue(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'text' in item) return String(item.text);
+        return '';
+      })
+      .join('');
+
+    if (text) {
+      try {
+        return JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function buildApprovalDescription(toolInput: Record<string, unknown>): string {
+  const command = typeof toolInput.command === 'string' ? toolInput.command.trim() : '';
+  if (command) return command;
+  return JSON.stringify(toolInput);
+}
+
+async function runClaudeTurn(
   agent: AgentId,
   prompt: string,
   opts: {
@@ -253,7 +298,12 @@ function claude(
     resume?: string;
     jsonSchema?: Record<string, unknown>;
   }
-): Promise<{ result: string; sessionId: string; structured: Record<string, unknown> | null }> {
+): Promise<{
+  result: string;
+  sessionId: string;
+  structured: Record<string, unknown> | null;
+  permissionDenied: { toolName: string; toolInput: Record<string, unknown> } | null;
+}> {
   return new Promise((resolve, reject) => {
     const safePrompt = prompt.startsWith('-') ? 'User says: ' + prompt : prompt;
     const effort = AGENT_EFFORT[agent] || 'high';
@@ -284,6 +334,9 @@ function claude(
     });
 
     let lastResult: Record<string, unknown> | null = null;
+    let structured: Record<string, unknown> | null = null;
+    const toolNames = new Map<string, string>();
+    let permissionDenied: { toolName: string; toolInput: Record<string, unknown> } | null = null;
 
     const rl = createInterface({ input: child.stdout });
 
@@ -308,6 +361,9 @@ function claude(
           if (block.type === 'tool_use') {
             const toolName = block.name as string;
             const input = block.input as Record<string, unknown>;
+            const toolUseId = block.id as string;
+            if (toolUseId) toolNames.set(toolUseId, toolName);
+
             let desc = toolName;
             let detail = '';
 
@@ -343,31 +399,32 @@ function claude(
           }
         }
       } else if (type === 'user') {
-        // Show tool results — including permission denials
         const msg = event.message as Record<string, unknown>;
         const content = msg?.content as Array<Record<string, unknown>>;
         if (content) {
           for (const block of content) {
-            if (block.type === 'tool_result' && block.is_error) {
-              const errorText = (block.content as string) || '';
-              if (errorText.includes('permissions')) {
+            if (block.type !== 'tool_result') continue;
+
+            const toolUseId = block.tool_use_id as string;
+            const toolName = toolNames.get(toolUseId);
+
+            if (!block.is_error && toolName === 'StructuredOutput') {
+              structured = parseStructuredOutputValue(block.content) || structured;
+            }
+
+            if (block.is_error) {
+              const errorText = typeof block.content === 'string'
+                ? block.content
+                : JSON.stringify(block.content);
+              if (errorText) {
                 emit(agent, state.currentPhase, 'permission_denied', errorText);
               }
             }
           }
         }
-        // Show raw tool result text for visibility
-        const toolResult = event.tool_use_result as Record<string, unknown>;
-        if (toolResult && typeof toolResult === 'object') {
-          const resultText = (toolResult as Record<string, string>).type === 'text'
-            ? '' // skip verbose file contents for now
-            : '';
-          if (resultText) emit(agent, state.currentPhase, 'tool_result', resultText);
-        }
       } else if (type === 'result') {
         lastResult = event;
 
-        // Accumulate token usage
         const usage = event.usage as Record<string, unknown>;
         if (usage) {
           state.usage.inputTokens += (usage.input_tokens as number) || 0;
@@ -378,6 +435,15 @@ function claude(
         const cost = event.total_cost_usd as number;
         if (cost) state.usage.totalCostUsd += cost;
         flush();
+
+        const denials = (event.permission_denials as Array<Record<string, unknown>> | undefined) || [];
+        const bashDenial = denials.find((denial) => denial.tool_name === 'Bash');
+        if (bashDenial) {
+          permissionDenied = {
+            toolName: 'Bash',
+            toolInput: (bashDenial.tool_input as Record<string, unknown>) || {},
+          };
+        }
       }
     });
 
@@ -395,7 +461,8 @@ function claude(
       resolve({
         result: (lastResult.result as string) || '',
         sessionId: (lastResult.session_id as string) || '',
-        structured: null,
+        structured,
+        permissionDenied,
       });
     });
 
@@ -404,6 +471,78 @@ function claude(
       reject(err);
     });
   });
+}
+
+async function claude(
+  agent: AgentId,
+  prompt: string,
+  opts: {
+    role: string;
+    resume?: string;
+    jsonSchema?: Record<string, unknown>;
+  }
+): Promise<{ result: string; sessionId: string; structured: Record<string, unknown> | null }> {
+  let currentPrompt = prompt;
+  let currentResume = opts.resume;
+
+  while (true) {
+    const turn = await runClaudeTurn(agent, currentPrompt, {
+      role: opts.role,
+      resume: currentResume,
+      jsonSchema: opts.jsonSchema,
+    });
+
+    const denied = turn.permissionDenied;
+    const strictBashApproval =
+      state.securityMode === 'strict' &&
+      (agent === 'C' || agent === 'D') &&
+      denied?.toolName === 'Bash';
+
+    if (!strictBashApproval) {
+      return {
+        result: turn.result,
+        sessionId: turn.sessionId,
+        structured: turn.structured,
+      };
+    }
+
+    const pending: PendingApproval = {
+      requestId: randomUUID(),
+      projectDir,
+      agent,
+      tool: denied.toolName,
+      input: denied.toolInput,
+      description: buildApprovalDescription(denied.toolInput),
+      createdAt: new Date().toISOString(),
+      approved: null,
+      sessionId: turn.sessionId,
+      phase: state.currentPhase,
+      reason: `Strict mode: Agent ${agent} Bash requires approval`,
+    };
+
+    writePendingApproval(projectDir, pending);
+    emit('system', state.currentPhase, 'status', `Approval requested for Agent ${agent} Bash`);
+
+    const approved = await waitForPendingApproval(projectDir, pending.requestId);
+    clearPendingApproval(projectDir, pending.requestId);
+
+    if (approved === null) {
+      emit('system', state.currentPhase, 'failure', `Approval request expired for Agent ${agent}`);
+      throw new Error(`Approval request expired for Agent ${agent}`);
+    }
+
+    emit(
+      'system',
+      state.currentPhase,
+      approved ? 'approval' : 'status',
+      approved ? `Approved Agent ${agent} Bash` : `Denied Agent ${agent} Bash`
+    );
+
+    currentResume = turn.sessionId;
+    currentPrompt = approved
+      ? 'The user approved your previous Bash request. Retry that exact command if it is still needed, then continue your task from where you left off.'
+      : 'The user denied your previous Bash request. Do not retry that command. Continue without it if possible, or explain exactly what is blocked.';
+  }
 }
 
 // ── JSON Schemas ────────────────────────────────────────────────────
@@ -596,7 +735,7 @@ async function run() {
     bSession = bResult.sessionId;
     saveSession('B', bSession);
 
-    const signal = parseSignal(bResult.result);
+    const signal = bResult.structured || parseSignal(bResult.result);
 
     if (isPositiveSignal(signal)) {
       planApproved = true;
@@ -693,7 +832,7 @@ async function run() {
     dSession = dResult.sessionId;
     saveSession('D', dSession);
 
-    const signal = parseSignal(dResult.result);
+    const signal = dResult.structured || parseSignal(dResult.result);
 
     if (isPositiveSignal(signal)) {
       codeApproved = true;
@@ -756,7 +895,7 @@ async function run() {
       jsonSchema: TEST_SCHEMA,
     });
 
-    const signal = parseSignal(testResult.result);
+    const signal = testResult.structured || parseSignal(testResult.result);
 
     if (isPositiveSignal(signal)) {
       testsPassed = true;
@@ -797,8 +936,8 @@ async function run() {
 
   await claude('A', [
     'The code has been reviewed and tested by Agent D. Everything passed.',
-    'Commit, push, and deploy if applicable.',
-    'If there is no repo, just confirm the build is complete.',
+    'Do not use Bash or git. The orchestrator will handle any final commit.',
+    'Confirm the build is complete and mention any environment caveats the user should know.',
   ].join('\n'), { role: ROLE_A, resume: aSession });
 
   setAgent('A', 'done');

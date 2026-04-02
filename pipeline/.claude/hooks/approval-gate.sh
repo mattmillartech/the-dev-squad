@@ -31,6 +31,10 @@ BUILDS_DIR=$(readlink -f "$HOME/Builds" 2>/dev/null || echo "$HOME/Builds")
 AGENT="${PIPELINE_AGENT:-unknown}"
 SECURITY_MODE="${PIPELINE_SECURITY_MODE:-fast}"
 
+lower_path() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 # ── Reject empty/malformed tool name ─────────────────────────────────
 
 if [ -z "$TOOL_NAME" ] || [ "$TOOL_NAME" = "null" ]; then
@@ -118,9 +122,11 @@ case "$TOOL_NAME" in
     fi
 
     FILENAME=$(basename "$FILEPATH")
+    BUILDS_DIR_CI=$(lower_path "$BUILDS_DIR")
+    FILEPATH_CI=$(lower_path "$FILEPATH")
 
     # Must be inside ~/Builds/ (with trailing slash)
-    if [[ "$FILEPATH" != "$BUILDS_DIR/"* ]]; then
+    if [[ "$FILEPATH_CI" != "$BUILDS_DIR_CI/"* ]]; then
       echo "BLOCKED: Cannot write to $FILEPATH — outside ~/Builds/" >&2
       exit 2
     fi
@@ -128,7 +134,8 @@ case "$TOOL_NAME" in
     # Jail non-S agents to the current project directory (CWD), not all of ~/Builds/
     if [ "$AGENT" != "S" ]; then
       PROJECT_DIR=$(readlink -f "$CWD" 2>/dev/null || echo "$CWD")
-      if [[ "$PROJECT_DIR" == "$BUILDS_DIR/"* ]] && [[ "$FILEPATH" != "$PROJECT_DIR/"* ]]; then
+      PROJECT_DIR_CI=$(lower_path "$PROJECT_DIR")
+      if [[ "$PROJECT_DIR_CI" == "$BUILDS_DIR_CI/"* ]] && [[ "$FILEPATH_CI" != "$PROJECT_DIR_CI/"* ]]; then
         echo "BLOCKED: Cannot write to $FILEPATH — outside current project" >&2
         exit 2
       fi

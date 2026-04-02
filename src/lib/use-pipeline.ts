@@ -37,6 +37,20 @@ export interface PipelineState {
   events: PipelineEvent[];
 }
 
+export interface PendingApproval {
+  requestId: string;
+  projectDir: string;
+  agent: AgentId | string;
+  tool: string;
+  input: Record<string, unknown>;
+  description: string;
+  createdAt: string;
+  approved: boolean | null;
+  sessionId?: string;
+  phase?: string;
+  reason?: string;
+}
+
 const EMPTY_STATE: PipelineState = {
   concept: '',
   projectDir: '',
@@ -105,11 +119,15 @@ export function usePipelineState({ pollInterval = 400, mode, model }: UsePipelin
     return res.json();
   }, []);
 
-  const approveBash = useCallback(async (approved: boolean) => {
+  const approveBash = useCallback(async (approved: boolean, pending?: PendingApproval | null) => {
     const res = await fetch('/api/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({
+        approved,
+        requestId: pending?.requestId,
+        projectDir: pending?.projectDir,
+      }),
     });
     return res.json();
   }, []);

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/shared/Badge';
 import { LunarOfficeScene } from '@/components/mission/LunarOfficeScene';
-import { usePipelineState, type AgentId, type AppMode, type SecurityMode } from '@/lib/use-pipeline';
+import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type SecurityMode } from '@/lib/use-pipeline';
 
 const AGENT_NAMES: Record<AgentId, string> = {
   A: 'Planner', B: 'Reviewer', C: 'Coder', D: 'Tester', S: 'Supervisor',
@@ -55,7 +55,7 @@ export default function PipelinePage() {
   const [pipelineStarted, setPipelineStarted] = useState(false);
   const [showPlan, setShowPlan] = useState(false);
   const [planContent, setPlanContent] = useState<string | null>(null);
-  const [pendingApproval, setPendingApproval] = useState<Record<string, unknown> | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [expandedAgent, setExpandedAgent] = useState<AgentId | null>(null);
   const [panelInputs, setPanelInputs] = useState<Record<string, string>>({ A: '', B: '', C: '', D: '' });
 
@@ -721,11 +721,14 @@ export default function PipelinePage() {
             {activeSecurityMode === 'strict' ? 'Strict Mode' : (pendingApproval.tool as string)} — Approval Required
           </p>
           <p className="mt-2 max-w-md break-all font-mono text-sm text-amber-200">
-            {(pendingApproval.description as string) || JSON.stringify(pendingApproval.input)}
+            {pendingApproval.description || JSON.stringify(pendingApproval.input)}
+          </p>
+          <p className="mt-2 text-[11px] uppercase tracking-wider text-amber-500">
+            Agent {pendingApproval.agent} · {pendingApproval.phase || state.currentPhase}
           </p>
           <div className="mt-3 flex gap-3">
-            <button onClick={() => approveBash(true)} className="rounded-lg bg-emerald-500 px-5 py-2 text-sm font-bold text-black hover:bg-emerald-400">APPROVE</button>
-            <button onClick={() => approveBash(false)} className="rounded-lg bg-red-500 px-5 py-2 text-sm font-bold text-white hover:bg-red-400">DENY</button>
+            <button onClick={() => approveBash(true, pendingApproval)} className="rounded-lg bg-emerald-500 px-5 py-2 text-sm font-bold text-black hover:bg-emerald-400">APPROVE</button>
+            <button onClick={() => approveBash(false, pendingApproval)} className="rounded-lg bg-red-500 px-5 py-2 text-sm font-bold text-white hover:bg-red-400">DENY</button>
           </div>
         </div>
       )}
