@@ -22,6 +22,7 @@
  *     cwd?: string,               // Working directory for claude (default: ~/Builds)
  *     addDirs?: string[],         // Additional directories to allow access to
  *     permissionMode?: string,    // Default: 'auto'
+ *     allowedTools?: string[],    // Explicit tool allowlist (e.g. ["Bash(git:*)", "Read", "Glob"])
  *     effort?: string,            // Reasoning effort level
  *   }
  *
@@ -44,6 +45,7 @@ export async function POST(req: NextRequest) {
     cwd = BUILDS_DIR,
     addDirs = [],
     permissionMode = 'auto',
+    allowedTools = [],
     effort,
   } = await req.json();
 
@@ -75,6 +77,10 @@ export async function POST(req: NextRequest) {
 
   for (const dir of addDirs) {
     args.push('--add-dir', dir);
+  }
+
+  if (allowedTools.length > 0) {
+    args.push('--allowedTools', ...allowedTools);
   }
 
   return new Promise<NextResponse>((resolve) => {
