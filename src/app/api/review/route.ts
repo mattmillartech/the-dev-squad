@@ -36,6 +36,69 @@ const BUILDS_DIR = join(homedir(), 'Builds');
 const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 const MANUAL_STATE_FILE = join(MANUAL_DIR, 'manual-state.json');
 
+// Appended to every review system prompt to enforce thorough, line-level analysis.
+const REVIEW_METHODOLOGY = `
+
+## Review Process (mandatory — follow in order)
+
+1. Fetch the latest code and generate the full diff.
+2. For EVERY changed file in the diff:
+   a. Read the complete file (not just the diff hunks) to understand surrounding context.
+   b. Trace each changed function/method: read its callers and callees to verify integration.
+   c. Check for the issues listed in the Review Checklist below.
+   d. If the file has corresponding tests (e.g. foo.ts → foo.test.ts), read them and verify coverage.
+3. Review any test results provided — verify all tests pass.
+4. Produce your verdict.
+
+## Review Checklist (check every item for every changed file)
+
+**Correctness**
+- Logic errors, off-by-one, wrong comparisons, inverted conditions
+- Missing null/undefined checks on values that can be nullish
+- Unhandled promise rejections, missing awaits, floating promises
+- Type assertions (as, !) that hide potential runtime errors
+- Incorrect status/state transitions
+
+**Security**
+- Shell injection via template strings in exec/spawn calls
+- Missing auth checks on API routes or data operations
+- XSS vectors in user-facing content
+- Sensitive data exposure (tokens, keys, PII in logs or responses)
+
+**Data Integrity**
+- Writes outside transactions that should be atomic
+- Orphaned records — creates without corresponding cleanup paths
+- Race conditions between concurrent reads/writes
+
+**Test Coverage**
+- Changed code paths that have no corresponding test assertions
+- Tests that pass but don't actually exercise the changed behavior (false green)
+- Missing edge case coverage (empty arrays, null inputs, boundary values)
+
+**Performance**
+- N+1 queries or unbounded loops over collections
+- Missing indexes for new query patterns
+- Large payloads in responses
+
+## Response Format
+
+Your ENTIRE response must be a single JSON object. No prose, no markdown fences — raw JSON only.
+
+If ALL checks pass:
+{"status":"passed","filesReviewed":["file1.ts","file2.ts"],"summary":"<2-3 sentences: what you verified, which tests you checked, why you're confident>"}
+
+or (for design/correctness reviews):
+{"status":"approved","filesReviewed":["file1.ts","file2.ts"],"reasoning":"<2-3 sentences explaining what you checked and why no blockers>"}
+
+If ANY issue found:
+{"status":"failed","findings":[{"file":"path/to/file.ts","line":42,"severity":"critical|warning","category":"correctness|security|data-integrity|test-coverage|performance","description":"Specific issue with code reference"}],"filesReviewed":["file1.ts"],"summary":"<overview>"}
+
+or (for design/correctness reviews):
+{"status":"issues","issues":["<specific issue>"],"filesReviewed":["file1.ts"]}
+
+A response with no filesReviewed or an empty filesReviewed array is INVALID. You must prove you read the code.
+A passed/approved verdict with no summary/reasoning is INVALID. You must justify your verdict.`;
+
 function readManualState(): Record<string, unknown> {
   if (existsSync(MANUAL_STATE_FILE)) {
     try { return JSON.parse(readFileSync(MANUAL_STATE_FILE, 'utf8')); } catch {}
@@ -122,10 +185,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Append the standard review methodology to the caller's system prompt
+  const fullSystemPrompt = systemPrompt + REVIEW_METHODOLOGY;
+
   // Build claude CLI args — prompt goes via stdin, not -p, to avoid MAX_ARG_STRLEN
   const args: string[] = [
     '-p',                             // print mode (non-interactive)
-    '--system-prompt', systemPrompt,
+    '--system-prompt', fullSystemPrompt,
     '--model', model,
     '--output-format', 'stream-json',
     '--verbose',
