@@ -21,7 +21,7 @@
  *     model?: string,             // Default: process.env.DEV_SQUAD_MODEL || 'claude-sonnet-4-6'
  *     cwd?: string,               // Working directory for claude (default: ~/Builds)
  *     addDirs?: string[],         // Additional directories to allow access to
- *     permissionMode?: string,    // Default: 'bypassPermissions'
+ *     permissionMode?: string,    // Default: 'auto'
  *     effort?: string,            // Reasoning effort level
  *   }
  *
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     model = process.env.DEV_SQUAD_MODEL || 'claude-sonnet-4-6',
     cwd = BUILDS_DIR,
     addDirs = [],
-    permissionMode = 'bypassPermissions',
+    permissionMode = 'auto',
     effort,
   } = await req.json();
 
