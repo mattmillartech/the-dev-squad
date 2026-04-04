@@ -238,6 +238,35 @@ export async function POST(req: NextRequest) {
           }),
         );
       } else {
+        // Validate response quality — reject shallow verdicts with no evidence of review
+        let parsed: Record<string, unknown> | null = null;
+        try { parsed = JSON.parse(resultText.trim()); } catch {
+          const match = resultText.match(/\{[\s\S]*?\}/);
+          if (match) try { parsed = JSON.parse(match[0]); } catch {}
+        }
+
+        if (parsed && typeof parsed.status === 'string') {
+          const filesReviewed = parsed.filesReviewed as string[] | undefined;
+          if (!filesReviewed || filesReviewed.length === 0) {
+            appendEvent(agent, 'failure', 'REJECTED: verdict had no filesReviewed — agent did not prove it read the code');
+            resolve(NextResponse.json({
+              success: false,
+              error: 'Agent returned a verdict with no filesReviewed. The review was not thorough enough.',
+              usage, totalCostUsd: totalCost,
+            }));
+            return;
+          }
+          if (parsed.status === 'passed' && !parsed.summary && !parsed.reasoning) {
+            appendEvent(agent, 'failure', 'REJECTED: passed verdict had no summary/reasoning');
+            resolve(NextResponse.json({
+              success: false,
+              error: 'Agent returned {"status":"passed"} with no summary or reasoning. Cannot accept an unjustified approval.',
+              usage, totalCostUsd: totalCost,
+            }));
+            return;
+          }
+        }
+
         resolve(
           NextResponse.json({
             success: true,
