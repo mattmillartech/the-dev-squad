@@ -36,7 +36,7 @@ const BUILDS_DIR = join(homedir(), 'Builds');
 const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 const MANUAL_STATE_FILE = join(MANUAL_DIR, 'manual-state.json');
 
-// Appended to every review system prompt to enforce thorough, line-level analysis.
+// Appended to every review system prompt to enforce thorough, boundary-aware analysis.
 const REVIEW_METHODOLOGY = `
 
 ## Review Process (mandatory — follow in order)
@@ -45,56 +45,41 @@ const REVIEW_METHODOLOGY = `
 2. For EVERY changed file in the diff:
    a. Read the complete file (not just the diff hunks) to understand surrounding context.
    b. Trace each changed function/method: read its callers and callees to verify integration.
-   c. Check for the issues listed in the Review Checklist below.
+   c. Apply the boundary-thinking questions below to each change.
    d. If the file has corresponding tests (e.g. foo.ts → foo.test.ts), read them and verify coverage.
 3. Review any test results provided — verify all tests pass.
 4. Produce your verdict.
 
-## Review Checklist (check every item for every changed file)
+## How to Think About Each Change
 
-**Correctness**
-- Logic errors, off-by-one, wrong comparisons, inverted conditions
-- Missing null/undefined checks on values that can be nullish
-- Unhandled promise rejections, missing awaits, floating promises
-- Type assertions (as, !) that hide potential runtime errors
-- Incorrect status/state transitions
+For every change in the diff, ask these questions — not just about the happy path, but at the boundaries:
 
-**Security**
-- Shell injection via template strings in exec/spawn calls
-- Missing auth checks on API routes or data operations
-- XSS vectors in user-facing content
-- Sensitive data exposure (tokens, keys, PII in logs or responses)
+- **Data volume:** What happens when this operates on MORE data than the author assumed? If a function caps a query but then reports success unconditionally, it is buggy — the function's correctness cannot depend on an assumption about data volume unless the code actually enforces that assumption (validates, paginates, or explicitly fails). "It's unlikely to exceed N" is not a defense; unlikely failures in production are silent corruption. If there is no enforcement, flag it.
+- **Partial failure:** What state does this leave behind if it fails halfway? Partial writes, dangling references, held resources, transactions that should be atomic but aren't.
+- **Authorization:** Who can reach this code path, and are they authorized? Trace from the entry point (route, callable, rule, trigger).
+- **Test isolation:** If this change touches test files, verify that every piece of global state modified in setup is restored in teardown. Be specific: check for assignments to global.*, window.*, or module-level objects. Framework helpers like jest.restoreAllMocks() only undo jest.spyOn() calls — direct property assignments survive and leak into other tests in the same worker. If you see a direct global assignment without a corresponding manual restore, flag it.
+- **Contract mismatches:** Does the caller's contract match the callee's guarantees? Type assertions, unchecked casts, and optional-chained reads that discard failure all hide mismatches.
+- **Security:** Shell injection in exec/spawn, XSS vectors, sensitive data in logs/responses, missing input validation at system boundaries.
 
-**Data Integrity**
-- Writes outside transactions that should be atomic
-- Orphaned records — creates without corresponding cleanup paths
-- Race conditions between concurrent reads/writes
-
-**Test Coverage**
-- Changed code paths that have no corresponding test assertions
-- Tests that pass but don't actually exercise the changed behavior (false green)
-- Missing edge case coverage (empty arrays, null inputs, boundary values)
-
-**Performance**
-- N+1 queries or unbounded loops over collections
-- Missing indexes for new query patterns
-- Large payloads in responses
+IMPORTANT: If you find ANY issue through this analysis — even one you think is "theoretical" or "unlikely" — it MUST appear in the findings array. Do not bury concerns in reasoning text while returning a clean verdict. A finding that the code doesn't defend against is a finding, period. The humans will decide what to fix and what to accept.
 
 ## Response Format
 
 Your ENTIRE response must be a single JSON object. No prose, no markdown fences — raw JSON only.
 
-If ALL checks pass:
+If ALL checks pass with no concerns:
 {"status":"passed","filesReviewed":["file1.ts","file2.ts"],"summary":"<2-3 sentences: what you verified, which tests you checked, why you're confident>"}
 
 or (for design/correctness reviews):
 {"status":"approved","filesReviewed":["file1.ts","file2.ts"],"reasoning":"<2-3 sentences explaining what you checked and why no blockers>"}
 
 If ANY issue found:
-{"status":"failed","findings":[{"file":"path/to/file.ts","line":42,"severity":"critical|warning","category":"correctness|security|data-integrity|test-coverage|performance","description":"Specific issue with code reference"}],"filesReviewed":["file1.ts"],"summary":"<overview>"}
+{"status":"failed","findings":[{"file":"path/to/file.ts","line":42,"severity":"error|warning","category":"correctness|security|data-integrity|test-isolation|performance","description":"Specific issue with code reference"}],"filesReviewed":["file1.ts"],"summary":"<overview>"}
 
 or (for design/correctness reviews):
-{"status":"issues","issues":["<specific issue>"],"filesReviewed":["file1.ts"]}
+{"status":"issues","findings":[{"file":"path","line":0,"severity":"error|warning","category":"category","description":"issue"}],"filesReviewed":["file1.ts"],"summary":"<overview>"}
+
+Use severity "error" for correctness/security bugs. Use severity "warning" for issues that are not immediately exploitable but represent missing defensive code. Any response with findings MUST use a non-passing status.
 
 A response with no filesReviewed or an empty filesReviewed array is INVALID. You must prove you read the code.
 A passed/approved verdict with no summary/reasoning is INVALID. You must justify your verdict.`;
@@ -307,8 +292,31 @@ export async function POST(req: NextRequest) {
         // Validate response quality — reject shallow verdicts with no evidence of review
         let parsed: Record<string, unknown> | null = null;
         try { parsed = JSON.parse(resultText.trim()); } catch {
-          const match = resultText.match(/\{[\s\S]*?\}/);
-          if (match) try { parsed = JSON.parse(match[0]); } catch {}
+          // Brace-matching extraction for nested JSON (handles findings arrays, etc.)
+          const text = resultText;
+          for (let i = 0; i < text.length; i++) {
+            if (text[i] !== '{') continue;
+            let depth = 0;
+            let inStr = false;
+            let esc = false;
+            for (let j = i; j < text.length; j++) {
+              const ch = text[j];
+              if (esc) { esc = false; continue; }
+              if (ch === '\\' && inStr) { esc = true; continue; }
+              if (ch === '"') { inStr = !inStr; continue; }
+              if (inStr) continue;
+              if (ch === '{' || ch === '[') depth++;
+              else if (ch === '}' || ch === ']') depth--;
+              if (depth === 0) {
+                try {
+                  const candidate = JSON.parse(text.slice(i, j + 1));
+                  if (candidate && typeof candidate.status === 'string') { parsed = candidate; }
+                } catch { /* try next opening brace */ }
+                break;
+              }
+            }
+            if (parsed) break;
+          }
         }
 
         if (parsed && typeof parsed.status === 'string') {
@@ -322,11 +330,12 @@ export async function POST(req: NextRequest) {
             }));
             return;
           }
-          if (parsed.status === 'passed' && !parsed.summary && !parsed.reasoning) {
-            appendEvent(agent, 'failure', 'REJECTED: passed verdict had no summary/reasoning');
+          const isPassingVerdict = parsed.status === 'passed' || parsed.status === 'approved';
+          if (isPassingVerdict && !parsed.summary && !parsed.reasoning) {
+            appendEvent(agent, 'failure', `REJECTED: ${parsed.status} verdict had no summary/reasoning`);
             resolve(NextResponse.json({
               success: false,
-              error: 'Agent returned {"status":"passed"} with no summary or reasoning. Cannot accept an unjustified approval.',
+              error: `Agent returned {"status":"${parsed.status}"} with no summary or reasoning. Cannot accept an unjustified verdict.`,
               usage, totalCostUsd: totalCost,
             }));
             return;
