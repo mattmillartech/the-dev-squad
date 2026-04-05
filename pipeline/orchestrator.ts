@@ -454,6 +454,7 @@ async function runClaudeTurn(
     let stalled = false;
     let settled = false;
     let lastStreamActivityAt = Date.now();
+    let bashInFlight = false;
     let diagnosticTail = '';
 
     function noteDiagnostic(text: string) {
@@ -464,6 +465,7 @@ async function runClaudeTurn(
     const rl = createInterface({ input: child.stdout });
     const stallWatcher = setInterval(() => {
       if (settled) return;
+      if (bashInFlight) { lastStreamActivityAt = Date.now(); return; }
       if (!shouldMarkTurnStalled(lastStreamActivityAt, Date.now(), TURN_IDLE_TIMEOUT_MS)) return;
 
       const canAutoResume = canAutoResumeTurn(agent, state.currentPhase) && !!currentSessionId;
@@ -554,6 +556,7 @@ async function runClaudeTurn(
             }
 
             emit(agent, state.currentPhase, 'tool_call', desc, detail);
+            if (toolName === 'Bash') bashInFlight = true;
           } else if (block.type === 'text') {
             const text = (block.text as string || '').trim();
             if (text) {
@@ -570,6 +573,7 @@ async function runClaudeTurn(
 
             const toolUseId = block.tool_use_id as string;
             const toolName = toolNames.get(toolUseId);
+            if (toolName === 'Bash') bashInFlight = false;
 
             if (!block.is_error && toolName === 'StructuredOutput') {
               structured = extractStructuredSignal(block.content) || structured;
@@ -646,6 +650,7 @@ async function runClaudeTurn(
       const text = chunk.toString();
       stderr += text;
       noteDiagnostic(text);
+      lastStreamActivityAt = Date.now();
     });
 
     child.on('close', (code) => {

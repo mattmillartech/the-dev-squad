@@ -32,7 +32,8 @@ export function summarizePrompt(prompt: string, maxLength: number = 140): string
 
 export function canAutoResumeTurn(agent: string, phase: string): boolean {
   return (agent === 'A' && (phase === 'planning' || phase === 'plan-review')) ||
-    (agent === 'B' && phase === 'plan-review');
+    (agent === 'B' && phase === 'plan-review') ||
+    (agent === 'D' && (phase === 'code-review' || phase === 'testing'));
 }
 
 export function shouldMarkTurnStalled(lastEventAtMs: number, nowMs: number, idleTimeoutMs: number = TURN_IDLE_TIMEOUT_MS): boolean {
@@ -64,6 +65,15 @@ export function buildResumePrompt(agent: string, phase: string): string {
       'Do not restart the review or summarize the plan.',
       'Output your verdict immediately: {"status": "approved"} or {"status": "questions", "questions": ["..."]}.',
       'Nothing else.',
+    ].join(' ');
+  }
+
+  if (agent === 'D') {
+    return [
+      'Your previous turn stalled mid-task.',
+      'Do not re-read all files or restart from scratch.',
+      'If a build or test command failed due to missing SDKs, simulators, or platform tools, report that as a finding — do not try to install or download them.',
+      'Output your verdict immediately.',
     ].join(' ');
   }
 
