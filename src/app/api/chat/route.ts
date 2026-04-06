@@ -19,6 +19,7 @@ import {
   setStopAfterReview,
   startPipelineRun,
   stopPipelineRun,
+  type PermissionMode,
   type RunGoal,
   type SecurityMode,
 } from '@/lib/pipeline-control';
@@ -374,7 +375,7 @@ function handleManual(agent: string, message: string, model: string) {
 function handlePipeline(
   agent: string,
   message: string,
-  defaults?: { securityMode?: SecurityMode; runGoal?: RunGoal }
+  defaults?: { securityMode?: SecurityMode; permissionMode?: PermissionMode; runGoal?: RunGoal }
 ) {
   let projectDir: string;
   let eventsFile: string;
@@ -431,10 +432,12 @@ function handlePipeline(
       writeState(controlEventsFile, controlState);
 
       if (intent.action === 'start-run') {
-        const effectiveSecurityMode = intent.securityMode || defaults?.securityMode || (controlState.securityMode === 'strict' ? 'strict' : 'fast');
-        const effectiveRunGoal = intent.runGoal || defaults?.runGoal || 'full-build';
+        const effectiveSecurityMode = defaults?.securityMode || (controlState.securityMode === 'strict' ? 'strict' : 'fast');
+        const effectiveRunGoal = defaults?.runGoal || 'full-build';
+        const effectivePermissionMode = defaults?.permissionMode || 'auto';
         const result = startPipelineRun({
           securityMode: effectiveSecurityMode,
+          permissionMode: effectivePermissionMode as 'auto' | 'plan' | 'dangerously-skip-permissions',
           runGoal: effectiveRunGoal,
         });
 
@@ -521,29 +524,60 @@ function handlePipeline(
       !state.buildComplete;
 
     if (isConceptPhase) {
-      const shouldUpdateConcept = !looksLikeStatusQuestion(message) || !state.concept;
-      if (shouldUpdateConcept) {
+      // First message — no concept yet. Capture it with a canned reply.
+      if (!state.concept) {
         state.concept = message.trim();
+        appendUserEvent(state, agent, message);
+        const reply = buildSupervisorConceptReply(String(state.concept), true);
+        const events = (state.events as Array<Record<string, unknown>>) || [];
+        events.push({
+          time: new Date().toISOString(),
+          agent: 'S',
+          phase: state.currentPhase || 'concept',
+          type: 'text',
+          text: reply,
+        });
+        state.events = events;
+        writeState(eventsFile, state);
+
+        return NextResponse.json({
+          success: true,
+          conceptCaptured: true,
+          concept: state.concept,
+        });
       }
 
+      // Concept exists — stream everything to Claude so S can think.
       appendUserEvent(state, agent, message);
-      const reply = buildSupervisorConceptReply(String(state.concept || ''), shouldUpdateConcept);
-      const events = (state.events as Array<Record<string, unknown>>) || [];
-      events.push({
-        time: new Date().toISOString(),
-        agent: 'S',
-        phase: state.currentPhase || 'concept',
-        type: 'text',
-        text: reply,
-      });
-      state.events = events;
       writeState(eventsFile, state);
 
-      return NextResponse.json({
-        success: true,
-        conceptCaptured: shouldUpdateConcept,
-        concept: state.concept,
-      });
+      const conceptContext = [
+        `[CONCEPT PHASE — no pipeline running yet]`,
+        `Current concept: ${state.concept}`,
+        '',
+        'The user is exploring this idea with you before starting the team.',
+        'Engage naturally — give your honest opinion, ask clarifying questions, suggest improvements.',
+        'If the user refines or changes the concept, acknowledge it conversationally.',
+        'When they seem ready, remind them they can say `start planning`, `start plan only`, or `start full build`.',
+        '',
+        message,
+      ].join('\n');
+
+      return streamClaude(
+        {
+          prompt: conceptContext,
+          projectDir,
+          pipelineDir: BUILDUI_DIR,
+          model: 'claude-opus-4-6',
+          roleFile: ROLE_FILES.S,
+          resume: sessionId || undefined,
+          pipelineAgent: 'S',
+          securityMode,
+        },
+        eventsFile,
+        agent,
+        sessionId
+      );
     }
   }
 
@@ -598,13 +632,14 @@ function handlePipeline(
 // ── Route handler ───────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const { agent, message, mode, model, securityMode, runGoal } = await req.json();
+  const { agent, message, mode, model, securityMode, permissionMode, runGoal } = await req.json();
 
   if (mode === 'manual') {
     return handleManual(agent, message, model || 'claude-sonnet-4-6');
   }
   return handlePipeline(agent, message, {
     securityMode: securityMode === 'strict' ? 'strict' : 'fast',
+    permissionMode: permissionMode === 'plan' ? 'plan' : permissionMode === 'dangerously-skip-permissions' ? 'dangerously-skip-permissions' : 'auto',
     runGoal: runGoal === 'plan-only' ? 'plan-only' : 'full-build',
   });
 }

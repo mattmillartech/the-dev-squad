@@ -26,11 +26,10 @@ When the user chats with the supervisor in pipeline mode, the chat route now inj
 
 ### Phase 0: Concept
 
-1. The **user** can chat with the **Supervisor** or the **Planner** in the viewer. The preferred path is to talk to the supervisor and let the supervisor manage the team.
-2. Before a run exists, the **Supervisor** captures the concept locally in staging instead of freelancing on the filesystem.
-3. The **Supervisor** or the **Planner** gathers the concept and constraints.
-4. Chat happens in a staging area (`~/Builds/.staging/`). No project directory created yet.
-5. When the user asks the **Supervisor** to start, or uses the fallback **START** button, staging moves to a real project dir and the pipeline runs according to the selected goal. In strict mode, the UI can still surface Bash approvals later in the run.
+1. The **user** sends the first message to the **Supervisor** — this captures the concept.
+2. After the concept is captured, the **Supervisor** engages naturally via Claude — discussing the idea, giving opinions, asking clarifying questions, and suggesting improvements. The user can also talk to the **Planner** directly.
+3. Chat happens in a staging area (`~/Builds/.staging/`). No project directory created yet.
+4. When the user asks the **Supervisor** to start, or uses the fallback **START** button, staging moves to a real project dir and the pipeline runs according to the dashboard toggles (security mode, permission mode, run goal). The concept-phase conversation is preserved in the pipeline events.
 
 ### Phase 1: Planning
 
@@ -88,7 +87,7 @@ Additional protections:
 - Plan is locked after the plan reviewer approves
 - Agent tool blocked for all agents (prevents recursive spawning)
 - Strict mode requires approval for every Bash call from the coder and tester
-- `--permission-mode auto` adds Claude's AI safety classifier on top
+- `--permission-mode auto` adds Claude's AI safety classifier on top (configurable via dashboard toggle or `PIPELINE_PERMISSION_MODE` env var)
 
 Roadmap:
 - **Fast mode** is the current autonomous default
@@ -130,11 +129,13 @@ claude -p "<prompt>" \
   --verbose
 ```
 
-- `--permission-mode auto` — Claude's AI classifier handles general safety
+- `--permission-mode auto` — Claude's AI classifier handles general safety (default; override with `PIPELINE_PERMISSION_MODE` env var or the dashboard Permission Mode toggle)
 - `--output-format stream-json` — real-time streaming for the viewer
 - `PIPELINE_AGENT` env var — tells the hook which agent is running
+- `PIPELINE_PERMISSION_MODE` env var — `auto` (default), `plan`, or `dangerously-skip-permissions`
 - Role files and shared doctrine provide the team model; hooks provide the lighter safety/discipline guardrails around it
 - Session ids are now persisted mid-turn so stalled A/B runs can be recovered instead of always forcing a reset
+- Stall detection: 5-minute idle timeout, up to 3 auto-resume attempts (A, B, and D), bash-aware (long-running commands don't trigger false stalls)
 - Future hardening replaces direct host spawning with a sandbox runner; see [SECURITY-ROADMAP.md](SECURITY-ROADMAP.md) and [SANDBOX-RUNNER-PLAN.md](SANDBOX-RUNNER-PLAN.md)
 
 ## The Orchestrator

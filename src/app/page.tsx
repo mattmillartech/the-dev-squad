@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useState, useRef, useEffect } from 'react';
+import Markdown from 'react-markdown';
 import { Badge } from '@/components/shared/Badge';
 import { AutoGrowTextarea } from '@/components/shared/AutoGrowTextarea';
 import { LunarOfficeScene } from '@/components/mission/LunarOfficeScene';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
-import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
+import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
 
 const AGENT_NAMES: Record<AgentId, string> = {
   A: 'Planner', B: 'Reviewer', C: 'Coder', D: 'Tester', S: 'Supervisor',
@@ -48,6 +49,7 @@ export default function PipelinePage() {
   const [mode, setMode] = useState<AppMode>('pipeline');
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
   const [selectedSecurityMode, setSelectedSecurityMode] = useState<SecurityMode>('fast');
+  const [selectedPermissionMode, setSelectedPermissionMode] = useState<PermissionMode>('auto');
   const [selectedRunGoal, setSelectedRunGoal] = useState<RunGoal>('full-build');
 
   const {
@@ -152,6 +154,7 @@ export default function PipelinePage() {
     setSendingAgents(prev => new Set([...prev, 'S']));
     await sendChat('S', chatInput.trim(), isPipeline ? {
       securityMode: selectedSecurityMode,
+      permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
     } : undefined);
     setChatInput('');
@@ -161,7 +164,7 @@ export default function PipelinePage() {
   async function handleStartPipeline() {
     completionNotifiedRef.current = false;
     setPipelineStarted(true);
-    const res = await startPipeline(selectedSecurityMode, selectedRunGoal);
+    const res = await startPipeline(selectedSecurityMode, selectedRunGoal, selectedPermissionMode);
     if (!res?.success) {
       setPipelineStarted(false);
       console.error('Pipeline failed to start:', res?.error || 'Unknown error');
@@ -208,6 +211,7 @@ export default function PipelinePage() {
     setSelectedAgent(id);
     await sendChat(id, msg, isPipeline ? {
       securityMode: selectedSecurityMode,
+      permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
     } : undefined);
     setPanelInputs(prev => ({ ...prev, [id]: '' }));
@@ -221,6 +225,7 @@ export default function PipelinePage() {
     setSendingAgents(prev => new Set([...prev, expandedAgent]));
     await sendChat(expandedAgent, msg, isPipeline ? {
       securityMode: selectedSecurityMode,
+      permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
     } : undefined);
     setChatInput('');
@@ -236,6 +241,7 @@ export default function PipelinePage() {
     setSendingAgents(prev => new Set([...prev, toAgent]));
     await sendChat(toAgent, msg, isPipeline ? {
       securityMode: selectedSecurityMode,
+      permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
     } : undefined);
     setSendingAgents(prev => { const n = new Set(prev); n.delete(toAgent); return n; });
@@ -440,6 +446,39 @@ export default function PipelinePage() {
                     {selectedSecurityMode === 'strict'
                       ? 'Every C/D Bash call needs approval'
                       : 'Safe Bash auto-runs, risky Bash asks'}
+                  </span>
+                </div>
+              </div>
+            )}
+            {isPipeline && (
+              <div className="mt-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">Permission Mode</div>
+                <div className="flex items-center gap-2">
+                  <div className="flex rounded-lg border border-white/10 bg-white/5">
+                    <button
+                      onClick={() => setSelectedPermissionMode('auto')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${selectedPermissionMode === 'auto' ? 'bg-emerald-600 text-white' : 'text-[#555] hover:text-[#888]'}`}
+                      style={{ borderRadius: '7px 0 0 7px' }}
+                    >Auto</button>
+                    <button
+                      onClick={() => setSelectedPermissionMode('plan')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${selectedPermissionMode === 'plan' ? 'bg-blue-600 text-white' : 'text-[#555] hover:text-[#888]'}`}
+                    >Plan</button>
+                    <button
+                      onClick={() => setSelectedPermissionMode('dangerously-skip-permissions')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${selectedPermissionMode === 'dangerously-skip-permissions' ? 'bg-red-600 text-white' : 'text-[#555] hover:text-[#888]'}`}
+                      style={{ borderRadius: '0 7px 7px 0' }}
+                    >Skip</button>
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    {selectedPermissionMode === 'auto'
+                      ? 'AI safety classifier (requires auto mode access)'
+                      : selectedPermissionMode === 'plan'
+                      ? 'Asks before every tool call'
+                      : 'No permission checks — wild west'}
                   </span>
                 </div>
               </div>
@@ -774,7 +813,7 @@ export default function PipelinePage() {
                 <span className="mr-1.5 text-[9px] text-[#333]">
                   {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </span>
-                {e.text}
+                <span className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:mt-3 prose-headings:mb-1 prose-li:my-0.5 prose-hr:my-2 prose-pre:my-1"><Markdown>{e.text}</Markdown></span>
               </div>
             ))}
           </div>
@@ -889,7 +928,7 @@ export default function PipelinePage() {
                       <span className="mr-1.5 text-[9px] text-[#333]">
                         {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </span>
-                      {e.text}
+                      <span className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:mt-3 prose-headings:mb-1 prose-li:my-0.5 prose-hr:my-2 prose-pre:my-1"><Markdown>{e.text}</Markdown></span>
                     </div>
                   ))}
                 </div>
@@ -950,7 +989,7 @@ export default function PipelinePage() {
                   <span className="mr-2 text-[10px] text-[#444]">
                     {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
-                  {e.text}
+                  <span className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:mt-3 prose-headings:mb-1 prose-li:my-0.5 prose-hr:my-2 prose-pre:my-1"><Markdown>{e.text}</Markdown></span>
                 </div>
               ))}
             </div>

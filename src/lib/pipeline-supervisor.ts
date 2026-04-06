@@ -239,8 +239,8 @@ export function getExecutionPathStatus(state: PipelineStateLike): ExecutionPathS
   }
 
   return {
-    label: 'DOCKER ALPHA BUILT',
-    detail: 'The Docker isolation architecture is built. We are not dropping it, but public isolated mode stays hidden until Claude subscription auth is reliable inside containers.',
+    label: 'IDLE',
+    detail: 'No active run.',
     variant: 'neutral',
   };
 }

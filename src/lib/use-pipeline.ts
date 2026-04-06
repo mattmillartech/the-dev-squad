@@ -7,6 +7,7 @@ export type AgentId = 'A' | 'B' | 'C' | 'D' | 'S';
 export type Phase = 'concept' | 'planning' | 'plan-review' | 'coding' | 'code-review' | 'testing' | 'deploy' | 'complete';
 export type AppMode = 'pipeline' | 'manual';
 export type SecurityMode = 'fast' | 'strict';
+export type PermissionMode = 'auto' | 'plan' | 'dangerously-skip-permissions';
 export type RunGoal = 'full-build' | 'plan-only';
 export type StopAfterPhase = 'none' | 'plan-review';
 export type PipelineStatus = 'idle' | 'running' | 'paused' | 'complete' | 'failed';
@@ -87,6 +88,7 @@ interface UsePipelineOptions {
 
 interface SendChatOptions {
   securityMode?: SecurityMode;
+  permissionMode?: PermissionMode;
   runGoal?: RunGoal;
 }
 
@@ -126,17 +128,18 @@ export function usePipelineState({ pollInterval = 400, mode, model }: UsePipelin
         mode,
         model,
         securityMode: options?.securityMode,
+        permissionMode: options?.permissionMode,
         runGoal: options?.runGoal,
       }),
     });
     return res.json();
   }, [mode, model]);
 
-  const startPipeline = useCallback(async (securityMode: SecurityMode, runGoal: RunGoal) => {
+  const startPipeline = useCallback(async (securityMode: SecurityMode, runGoal: RunGoal, permissionMode?: PermissionMode) => {
     const res = await fetch('/api/start-pipeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ securityMode, runGoal }),
+      body: JSON.stringify({ securityMode, permissionMode, runGoal }),
     });
     return res.json();
   }, []);
