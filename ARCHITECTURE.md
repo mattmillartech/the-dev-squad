@@ -31,12 +31,16 @@ When the user chats with the supervisor in pipeline mode, the chat route now inj
 3. Chat happens in a staging area (`~/Builds/.staging/`). No project directory created yet.
 4. When the user asks the **Supervisor** to start, or uses the fallback **START** button, staging moves to a real project dir and the pipeline runs according to the dashboard toggles (security mode, permission mode, run goal). The concept-phase conversation is preserved in the pipeline events.
 
+This same pattern also works for existing repos: tell the Supervisor it is an existing codebase, describe the changes you want, and let the Planner build context from the real repo before the team starts planning or coding.
+
 ### Phase 1: Planning
 
 5. The **Planner** reads `build-plan-template.md` — the planning playbook.
 6. The **Planner** completes the planning checklist — research, write, verify, context, one self-review pass.
 7. The **Planner** writes the plan to `plan.md` with complete, copy-pasteable code for every file.
 8. The **Planner** self-reviews once, then hands the plan to the **Plan Reviewer**. The reviewer is the formal external review gate.
+
+For larger builds, this phase can legitimately take 10-15 minutes or longer because the planner is verifying packages, docs, and architecture details before the team starts coding.
 
 ### Phase 1b: Plan Review
 

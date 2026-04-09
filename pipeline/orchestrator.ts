@@ -44,6 +44,8 @@ import {
 import {
   buildPlanningResearchPrompt,
   buildPlanningResearchResumePrompt,
+  extractPlanningResearchSummary,
+  hasPlanningWriteStarted,
   buildPlanningSelfReviewPrompt,
   buildPlanningSelfReviewResumePrompt,
   buildPlanningWritePrompt,
@@ -713,6 +715,7 @@ async function claude(
     resume?: string;
     jsonSchema?: Record<string, unknown>;
     resumePrompt?: string;
+    restartOnStall?: boolean;
   }
 ): Promise<{ result: string; sessionId: string; structured: Record<string, unknown> | null }> {
   let currentPrompt = prompt;
@@ -745,6 +748,18 @@ async function claude(
     }
 
     if (turn.stalled) {
+      if (opts.restartOnStall && autoResumeCount < MAX_AUTO_RESUMES) {
+        autoResumeCount += 1;
+        currentResume = undefined;
+        currentPrompt = opts.resumePrompt || currentPrompt;
+        emit('system', state.currentPhase, 'status', `Restarting Agent ${agent} with a fresh turn after a stalled session`);
+        emitSupervisor(
+          state.currentPhase,
+          `The ${agent === 'A' ? 'planner' : agent === 'B' ? 'reviewer' : 'agent'} got stuck in a bad session, so I am restarting the current step from the saved context instead of resuming the same loop.`
+        );
+        continue;
+      }
+
       if (turn.sessionId && canAutoResumeTurn(agent, state.currentPhase) && autoResumeCount < MAX_AUTO_RESUMES) {
         autoResumeCount += 1;
         currentResume = turn.sessionId;
@@ -953,16 +968,25 @@ async function runPlanningPhase(aSession: string, options?: { resumeStalled?: bo
   }
 
   if (step === 'write') {
+    const restartWriteFromSummary =
+      options?.resumeStalled &&
+      !existsSync(existingPlanPath) &&
+      hasPlanningWriteStarted(state.events);
+    const researchSummary = restartWriteFromSummary ? extractPlanningResearchSummary(state.events) : null;
+
     emit('A', 'planning', 'status', 'Writing plan.md...');
     emitSupervisor(
       'planning',
-      'Research is complete. The planner is drafting plan.md now in a dedicated write step so we do not lose the work between research and output.'
+      restartWriteFromSummary
+        ? 'The planner got stuck in the old write session, so I am restarting the write step from the verified research summary instead of looping the same resume again.'
+        : 'Research is complete. The planner is drafting plan.md now in a dedicated write step so we do not lose the work between research and output.'
     );
 
-    const writeResult = await claude('A', buildPlanningWritePrompt(projectDir), {
+    const writeResult = await claude('A', buildPlanningWritePrompt(projectDir, researchSummary), {
       role: ROLE_A,
-      resume: aSession || (options?.resumeStalled ? resumeSession : undefined),
-      resumePrompt: buildPlanningWriteResumePrompt(projectDir),
+      resume: restartWriteFromSummary ? undefined : (aSession || (options?.resumeStalled ? resumeSession : undefined)),
+      resumePrompt: buildPlanningWriteResumePrompt(projectDir, researchSummary),
+      restartOnStall: restartWriteFromSummary,
     });
     aSession = writeResult.sessionId;
     saveSession('A', aSession);

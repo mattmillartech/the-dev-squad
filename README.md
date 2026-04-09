@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.3.10-blue" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.3.17-blue" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
   <img src="https://img.shields.io/badge/claude-opus%204.6-blueviolet" alt="Claude Opus 4.6" />
   <img src="https://img.shields.io/badge/agents-5-orange" alt="5 Agents" />
@@ -95,6 +95,8 @@ The supervisor is the recommended front door now. The old buttons and direct spe
 
 **Phase 1: Planning** — The planner reads the build plan template and checklist, researches the concept (web searches, docs, source code), writes `plan.md` with complete, copy-pasteable code for every file, then does one self-review pass before handing it to the plan reviewer. No placeholders.
 
+Large planning runs are often the slowest part of the system. For bigger builds, it is normal for planning to take 10-15 minutes, and sometimes longer, because the planner is doing real source verification and producing a code-complete plan before coding starts. If the planner is still emitting events, let it cook.
+
 **Phase 1b: Plan Review** — The plan reviewer reads the plan and sends structured questions back to the planner. They loop until the reviewer is fully satisfied and approves. The plan is locked. No agent can modify it.
 
 **Phase 2: Coding** — The coder reads the locked plan and builds exactly what it says. Every file, every dependency, every line of code.
@@ -158,6 +160,24 @@ pnpm dev
 Open [http://localhost:3000](http://localhost:3000) for Office View or [http://localhost:3000/squad](http://localhost:3000/squad) for Squad View.
 
 That's it. The viewer handles everything — spawning agents, running the orchestrator, managing builds.
+
+## Working With Existing Projects
+
+Yes, The Dev Squad can work on an existing repo.
+
+The best current flow is:
+
+1. open the existing repo in The Dev Squad
+2. tell the **Supervisor** that this is an existing codebase
+3. explain what the repo is, what you want changed, and any constraints that matter
+4. let the Supervisor hand it to the **Planner** so the team can build context from the real codebase before planning and coding
+
+Good prompts look like:
+
+- `This is an existing repo. Read the current codebase first, understand how it works, then help me make the following changes: ...`
+- `I am not starting from scratch. Build context from the repo as it exists today, then create a plan for: ...`
+
+This flow works today. What is still rough is the UX: The Dev Squad is currently more polished for new builds in `~/Builds/` than for a first-class "import existing project" flow.
 
 ---
 

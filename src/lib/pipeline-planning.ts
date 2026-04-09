@@ -41,6 +41,35 @@ export function detectPlanningStep(
   return 'research';
 }
 
+export function hasPlanningWriteStarted(events: PlanningEventLike[]): boolean {
+  return events.some(
+    (event) =>
+      event.agent === 'A' &&
+      event.phase === 'planning' &&
+      event.type === 'status' &&
+      String(event.text || '').trim() === 'Writing plan.md...'
+  );
+}
+
+export function extractPlanningResearchSummary(events: PlanningEventLike[]): string | null {
+  const planningEvents = events.filter((event) => event.agent === 'A' && event.phase === 'planning');
+  const cutoff = planningEvents.findIndex(
+    (event) => event.type === 'status' && String(event.text || '').trim() === 'Writing plan.md...'
+  );
+  const searchable = cutoff === -1 ? planningEvents : planningEvents.slice(0, cutoff);
+
+  for (let i = searchable.length - 1; i >= 0; i -= 1) {
+    const event = searchable[i];
+    if (event.type !== 'text') continue;
+    const text = String(event.text || '').trim();
+    if (text.length < 200) continue;
+    if (WRITE_INTENT_PATTERN.test(text)) continue;
+    return text;
+  }
+
+  return null;
+}
+
 export function buildPlanningResearchPrompt(phase0Context: string, concept: string): string {
   return [
     phase0Context
@@ -75,24 +104,26 @@ export function buildPlanningResearchResumePrompt(): string {
   ].join(' ');
 }
 
-export function buildPlanningWritePrompt(projectDir: string): string {
+export function buildPlanningWritePrompt(projectDir: string, researchSummary?: string | null): string {
   return [
     'Research is already complete in this session.',
+    researchSummary ? `Verified research summary from the completed research pass:\n\n${researchSummary}\n` : '',
     `Write the full build plan to ${join(projectDir, 'plan.md')} now.`,
     'Use the Write tool on plan.md in your next tool action. Do not narrate that you are about to write it; actually write it.',
     'The plan must contain complete, copy-pasteable code for every file the coder will need.',
     'Do not do more research unless a specific missing fact blocks the write.',
     'When the draft plan is written, say "Draft written" and stop.',
-  ].join(' ');
+  ].filter(Boolean).join('\n\n');
 }
 
-export function buildPlanningWriteResumePrompt(projectDir: string): string {
+export function buildPlanningWriteResumePrompt(projectDir: string, researchSummary?: string | null): string {
   return [
     'You stalled during the write step.',
+    researchSummary ? `Use this already-verified research instead of redoing the investigation:\n\n${researchSummary}\n` : '',
     `Use the Write tool on ${join(projectDir, 'plan.md')} immediately in your next tool action.`,
     'Do not narrate. Do not re-summarize research. Write the plan now.',
     'If plan.md already exists, finish it instead of starting over.',
-  ].join(' ');
+  ].filter(Boolean).join('\n\n');
 }
 
 export function buildPlanningSelfReviewPrompt(projectDir: string): string {
